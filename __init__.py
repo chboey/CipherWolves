@@ -1,0 +1,3 @@
+"""
+CipherWolves package
+""" 
