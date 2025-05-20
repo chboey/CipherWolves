@@ -1,20 +1,24 @@
+import asyncio
 from agents.agent_manager import initialize_agents
+from agents.agent_interaction import user_interaction
 from utils.keywords import generate_keywords
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.adk.memory import InMemoryMemoryService
 from google.genai.types import Content, Part
-import asyncio
 from datetime import datetime, timedelta
 
-async def run_conversation(agents, keywords, duration_minutes=0.5):
+async def call_conversationFlow(agents, keywords, duration_minutes):
     """
     Run a conversation between agents for a specified duration using only allowed keywords.
     
     Args:
         agents (list): List of initialized agents
         keywords (list): List of allowed keywords
-        duration_minutes (int): Duration of the conversation in minutes
+        duration_minutes (float): Duration of the conversation in minutes
+        
+    Returns:
+        tuple: (session_services, memory_services, runners, complete_conversation)
     """
     # Initialize services for each agent
     session_services = {}
@@ -39,6 +43,9 @@ async def run_conversation(agents, keywords, duration_minutes=0.5):
             user_id="group_chat",
             session_id=f"session_{agent.name}"
         )
+        
+    # Storing complete conversation.
+    complete_conversation = []
     
     # Set end time
     end_time = datetime.now() + timedelta(minutes=duration_minutes)
@@ -78,6 +85,9 @@ async def run_conversation(agents, keywords, duration_minutes=0.5):
             current_message = final_response
             current_speaker = next_speaker.name
             
+            # append into conversation logs.
+            complete_conversation.append({"speaker": current_speaker, "message": current_message})
+            
             # Add the completed session to memory
             completed_session = session_services[next_speaker.name].get_session(
                 app_name="agent_conversation",
@@ -93,8 +103,13 @@ async def run_conversation(agents, keywords, duration_minutes=0.5):
         await asyncio.sleep(2)
     
     print(f"\n=== Conversation Ended at {datetime.now().strftime('%H:%M:%S')} ===\n")
+    
+    return session_services, memory_services, runners, complete_conversation
+    
 
 if __name__ == "__main__":
+    
+    gameEnd = False
     # Generate 100 random keywords
     keywords = generate_keywords(100)
     
@@ -116,6 +131,14 @@ if __name__ == "__main__":
         print(f"Name: {agent.name}")
         print(f"Description: {agent.description}")
         print("Instruction:", agent.instruction[:100] + "..." if len(agent.instruction) > 100 else agent.instruction)
-    
+        
+    # while(gameEnd):
+
     # Run the conversation
-    asyncio.run(run_conversation(agents, keywords, duration_minutes=0.5))
+    session_services, memory_services, runners, complete_conversation = asyncio.run(call_conversationFlow(agents, keywords, duration_minutes=1.0))
+        
+    # Run the user input interaction and agent starts analysis.
+    asyncio.run(user_interaction(agents,session_services,memory_services,runners,complete_conversation,duration_minutes=0.5))
+        
+    #Voting Mechanism ...
+    

@@ -1,6 +1,8 @@
-from utils.keywords import generate_keywords
 from utils.personas import randomize_personas
-from google.adk.agents import Agent
+from google.adk.agents import LlmAgent
+from google.adk.models.lite_llm import LiteLlm
+
+AGENT_NAME = ['Alice','Bob','Cindy','Dom','Elise']
 
 
 def initialize_agents(num_agents, model="gemini-2.0-flash"):
@@ -20,12 +22,14 @@ def initialize_agents(num_agents, model="gemini-2.0-flash"):
         persona_instruction = randomize_personas()
         
         # Create agent with the persona
-        agent = Agent(
-            name=f"agent_{i+1}",
-            model=model,
-            description=f"Agent {i+1} with a unique persona",
+        agent = LlmAgent(
+            name=f"agent_{AGENT_NAME[i]}",
+            model=LiteLlm(model=model),
+            description=f"Agent {AGENT_NAME[i]} with a unique persona",
             instruction=persona_instruction,
-            tools=[]
+            input_schema=None,
+            tools=[],
+            output_key="agent_conversation",
         )
         agents.append(agent)
     
