@@ -138,7 +138,7 @@ if __name__ == "__main__":
     session_services, memory_services, runners, complete_conversation = asyncio.run(call_conversationFlow(agents, keywords, duration_minutes=1.0))
         
     # Run the user input interaction and agent starts analysis.
-    asyncio.run(user_interaction(agents,session_services,memory_services,runners,complete_conversation,duration_minutes=0.5))
+    asyncio.run(user_interaction(agents,session_services,memory_services,runners,complete_conversation,duration_minutes=2))
         
     #Voting Mechanism ...
     

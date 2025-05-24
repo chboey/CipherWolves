@@ -24,7 +24,7 @@ def initialize_agents(num_agents, model="gemini-2.0-flash"):
         # Create agent with the persona
         agent = LlmAgent(
             name=f"agent_{AGENT_NAME[i]}",
-            model=LiteLlm(model=model),
+            model=model,
             description=f"Agent {AGENT_NAME[i]} with a unique persona",
             instruction=persona_instruction,
             input_schema=None,

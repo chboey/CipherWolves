@@ -103,38 +103,56 @@ async def get_agent_analysis(agent, runner, session_service, memory_service, ana
     )
     
     # Create a new session for this analysis
-    analysis_session_id = f"analysis_{agent.name}_{datetime.now().strftime('%H%M%S')}"
-    session_service.create_session(
-        app_name="agent_analysis",
-        user_id="analysis",
-        session_id=analysis_session_id
-    )
+    analysis_session_id = f"session_{agent.name}"
     
-    # Get analysis from agent
-    analysis_response = None
-    for event in runner.run(
-        user_id="analysis",
-        session_id=analysis_session_id,
-        new_message=analysis_content
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            analysis_response = event.content.parts[0].text
-            break
+    try:
+        # Get existing session or create new one
+        session = session_service.get_session(
+            app_name="agent_conversation",
+            user_id="group_chat",
+            session_id=analysis_session_id
+        )
         
-        # Future have to get this analysis log for post-analysis Insight...
-    
-    if not analysis_response:
-        analysis_response = "No analysis provided."
-    
-    # Add the completed session to memory
-    completed_session = session_service.get_session(
-        app_name="agent_analysis",
-        user_id="analysis",
-        session_id=analysis_session_id
-    )
-    await memory_service.add_session_to_memory(completed_session)
-    
-    return agent.name, analysis_response
+        if not session:
+            # Create new session if it doesn't exist
+            session = session_service.create_session(
+                app_name="agent_conversation",
+                user_id="group_chat",
+                session_id=analysis_session_id,
+                state={"status": "initialized"}
+            )
+            
+        if not session:
+            raise ValueError(f"Failed to create/get session: {analysis_session_id}")
+            
+        # Get analysis from agent
+        analysis_response = None
+        for event in runner.run(
+            user_id="group_chat",
+            session_id=analysis_session_id,
+            new_message=analysis_content
+        ):
+            if event.is_final_response() and event.content and event.content.parts:
+                analysis_response = event.content.parts[0].text
+                break
+        
+        if not analysis_response:
+            analysis_response = "No analysis provided."
+        
+        # Add the completed session to memory
+        completed_session = session_service.get_session(
+            app_name="agent_conversation",
+            user_id="group_chat",
+            session_id=analysis_session_id
+        )
+        if completed_session:
+            await memory_service.add_session_to_memory(completed_session)
+        
+        return agent.name, analysis_response
+        
+    except Exception as e:
+        print(f"Error in agent analysis for {agent.name}: {str(e)}")
+        return agent.name, f"Error during analysis: {str(e)}"
 
 
 async def agent_voting(): 
