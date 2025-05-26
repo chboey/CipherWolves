@@ -1,6 +1,7 @@
 import asyncio
 from google.genai.types import Content, Part
 from datetime import datetime, timedelta
+from utils.voting import conduct_voting_round
 
 async def user_interaction(agents, session_services, memory_services, runners, complete_conversation, duration_minutes):
     """
@@ -13,6 +14,8 @@ async def user_interaction(agents, session_services, memory_services, runners, c
         runners (dict): Map of agent name to runner
         complete_conversation (list): Log of the complete conversation
         duration_minutes (float): Time duration for analysis phase
+    
+    Return: user_analyses (list): Log of the complete agent analysis based on user's input.
     """
     
     # Convert conversation to a readable format for agents
@@ -23,6 +26,8 @@ async def user_interaction(agents, session_services, memory_services, runners, c
     
     # Set end time for analysis phase
     end_time = datetime.now() + timedelta(minutes=duration_minutes)
+    
+    user_analyses = []
     
     while datetime.now() < end_time:
         # Wait for user input or timeout
@@ -65,9 +70,16 @@ async def user_interaction(agents, session_services, memory_services, runners, c
             analyses = await asyncio.gather(*analysis_tasks)
             
             # Display all analysis.
+            agent_responses = {}
             for agent_name, analysis in analyses:
                 print(f"\n--- {agent_name}'s Analysis ---")
                 print(analysis)
+                agent_responses[agent_name] = analysis
+                
+            user_analyses.append({
+                "user_input": user_input,
+                "agent_responses": agent_responses,
+            })
                 
         except asyncio.TimeoutError:
             # No input received within timeout period, continue the loop
@@ -80,6 +92,8 @@ async def user_interaction(agents, session_services, memory_services, runners, c
             break
     
     print("\n=== Analysis Phase Ended ===")
+    
+    return user_analyses
     
 
 async def get_agent_analysis(agent, runner, session_service, memory_service, analysis_prompt):
@@ -155,6 +169,110 @@ async def get_agent_analysis(agent, runner, session_service, memory_service, ana
         return agent.name, f"Error during analysis: {str(e)}"
 
 
-async def agent_voting(): 
+# NEW: Voting mechanism session for imposter detection
+async def voting_session(agents, session_services, memory_services, runners, 
+                        complete_conversation, user_analyses, werewolf, duration_minutes):
+    """
+    Conduct a voting session where agents vote for who they think is the imposter.
     
-    return 
+    Args:
+        agents (list): List of initialized agents
+        session_services (dict): Map of agent name to session service
+        memory_services (dict): Map of agent name to memory service
+        runners (dict): Map of agent name to runner
+        complete_conversation (list): Log of the complete conversation
+        user_analyses (list): List of user inputs and agent analyses
+        werewolf (agent): the selected imposter.
+        voting_duration_minutes (float): Time duration for voting phase
+    """
+    print("\n 🗳️ MULTI-ROUND VOTING SESSION")
+    
+    remaining_agents = agents.copy()
+    round_number = 1
+    eliminated_agents = []
+    game_history = []
+    
+    print(f"🤫 [SECRET] The actual imposter is: {werewolf.name}")
+    print(f"🎯 Total agents: {len(remaining_agents)}")
+    print("   (This information is hidden from the agents)\n")
+    
+     # Game continues until imposter is found or only 2 agents remain
+    while len(remaining_agents) > 2:
+        print(f"\n 🔄 ROUND {round_number}")
+        print(f"👥 Remaining agents: {[agent.name for agent in remaining_agents]}")
+        print(f"💀 Eliminated agents: {[agent.name for agent in eliminated_agents]}")
+        
+        # Conduct voting round
+        round_result = await conduct_voting_round(
+            remaining_agents, session_services, memory_services, runners,
+            complete_conversation, user_analyses, game_history, round_number, duration_minutes
+        )
+        
+        # Process round result
+        if round_result["action"] == "eliminate":
+            eliminated_agent = round_result["eliminated_agent"]
+            remaining_agents = [agent for agent in remaining_agents if agent.name != eliminated_agent.name]
+            eliminated_agents.append(eliminated_agent)
+            
+            # Check if eliminated agent was the imposter
+            if eliminated_agent == werewolf:
+                print(f"\n🎉 GAME OVER - AGENTS WIN!")
+                print(f"✅ The imposter {eliminated_agent.name} has been eliminated!")
+                print(f"🏆 Surviving agents: {[agent.name for agent in remaining_agents]}")
+                break
+            else:
+                print(f"\n😔 {eliminated_agent.name} was innocent!")
+                print(f"🔄 The game continues...")
+                
+        elif round_result["action"] == "no_elimination":
+            print(f"\n🤝 No elimination this round: {round_result['reason']}")
+            print(f"🔄 Moving to next round...")
+        
+        # Add round to game history
+        game_history.append(round_result)
+        round_number += 1
+        
+        # Small delay between rounds
+        await asyncio.sleep(3)
+    
+    # End game conditions
+    if len(remaining_agents) <= 2 and werewolf in remaining_agents:
+        print(f"\n😈 GAME OVER - IMPOSTER WINS!")
+        print(f"💀 Too many innocent agents were eliminated!")
+        print(f"🎭 The imposter {werewolf.name} survives among the final {len(remaining_agents)} agents!")
+        print(f"👥 Final survivors: {[agent.name for agent in remaining_agents]}")
+    
+    # Display game summary
+    await display_game_summary(game_history, werewolf, eliminated_agents, remaining_agents)
+
+
+async def display_game_summary(game_history, werewolf, eliminated_agents, remaining_agents):
+    """
+    Display a comprehensive game summary.
+    """
+    print(f"\n{'='*70}")
+    print("📋 GAME SUMMARY")
+    print(f"{'='*70}")
+    
+    print(f"\n🎭 ACTUAL IMPOSTER: {werewolf.name}")
+    print(f"💀 ELIMINATED AGENTS: {[agent.name for agent in eliminated_agents]}")
+    print(f"👥 SURVIVING AGENTS: {[agent.name for agent in remaining_agents]}")
+    
+    print(f"\n📊 ROUND-BY-ROUND BREAKDOWN:")
+    print("-" * 40)
+    for i, round_data in enumerate(game_history, 1):
+        print(f"Round {i}: {round_data['summary']}")
+    
+    # Determine final outcome
+    if werewolf not in remaining_agents:
+        print(f"\n🏆 FINAL RESULT: AGENTS WIN!")
+        print(f"✅ The imposter was successfully identified and eliminated!")
+    else:
+        print(f"\n😈 FINAL RESULT: IMPOSTER WINS!")
+        print(f"💀 The imposter survived until the end!")
+    
+    print(f"\n📈 GAME STATISTICS:")
+    print(f"   Total Rounds: {len(game_history)}")
+    print(f"   Agents Eliminated: {len(eliminated_agents)}")
+    print(f"   Final Survivors: {len(remaining_agents)}")
+    print(f"   Imposter Status: {'Survived' if werewolf.name in [agent.name for agent in remaining_agents] else 'Eliminated'}")
