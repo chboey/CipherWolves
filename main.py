@@ -7,6 +7,7 @@ from google.adk.runners import Runner
 from google.adk.memory import InMemoryMemoryService
 from google.genai.types import Content, Part
 from datetime import datetime, timedelta
+from agents.agent_interaction import voting_session
 
 async def call_conversationFlow(agents, keywords, duration_minutes):
     """
@@ -114,8 +115,8 @@ if __name__ == "__main__":
     keywords = generate_keywords(100)
     
     # Initialize 5 agents
-    agents = initialize_agents(5)
-    
+    agents, werewolf = initialize_agents(5)
+        
     # Add keyword restriction to each agent's instruction
     for agent in agents:
         keyword_instruction = (
@@ -138,7 +139,9 @@ if __name__ == "__main__":
     session_services, memory_services, runners, complete_conversation = asyncio.run(call_conversationFlow(agents, keywords, duration_minutes=1.0))
         
     # Run the user input interaction and agent starts analysis.
-    asyncio.run(user_interaction(agents,session_services,memory_services,runners,complete_conversation,duration_minutes=2))
+    user_analyses = asyncio.run(user_interaction(agents,session_services,memory_services,runners,complete_conversation,duration_minutes=0.5))
         
     #Voting Mechanism ...
+    asyncio.run(voting_session(agents,session_services,memory_services,runners,complete_conversation,user_analyses,werewolf,duration_minutes=0.2))
+    
     

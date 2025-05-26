@@ -43,7 +43,7 @@ def initialize_agents(num_agents, model="gemini-2.0-flash"):
         )
         agents.append(agent)
     
-    return agents
+    return agents, agents[werewolf_index]
 
 
     
