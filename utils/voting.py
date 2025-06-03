@@ -35,9 +35,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     agent_names = [agent.name for agent in remaining_agents]
     
     voting_prompt = f"""
-    IMPOSTER ELIMINATION GAME - ROUND {round_number}
-    
-    You are participating in Round {round_number} of the imposter elimination game.
+    You are participating in the Round of the imposter elimination game.
     
     CURRENT SITUATION:
     - Remaining Players: {', '.join(agent_names)}
@@ -51,7 +49,8 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     {history_context}
     
     VOTING INSTRUCTIONS:
-    Based on all available information, vote to ELIMINATE one player you believe is the imposter.
+    Based on all available information, vote to ELIMINATE one player other than yourself that you believe is the imposter.
+    You would be fed previous chat history, user analysis and game history, if you see ur name, refer to yourself as I. Example: As I have said earlier.
     
     Analyze these aspects:
     1. Keyword usage patterns and consistency
@@ -60,7 +59,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     4. Overall suspicion level based on all interactions
     
     VOTING OPTIONS:
-    - Vote to ELIMINATE a specific agent: Choose from {agent_names}
+    - Vote to ELIMINATE a specific agent that is not yourself.
     - ABSTAIN: If you don't have enough evidence (but be careful - abstaining helps the imposter!)
     
     IMPORTANT GAME RULES:
@@ -82,37 +81,36 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     SUSPICION_LEVEL: 8
     """
     
-    print(f"\n🗳️ Starting Round {round_number} voting...")
-    print(f"⏰ Voting duration: {duration_minutes} minutes")
-    print(f"👥 Voting participants: {', '.join(agent_names)}")
+    # print(f"\n🗳️ Starting Voting Round...")
+    # print(f"⏰ Voting duration: {duration_minutes} minutes")
+    # print(f"👥 Voting participants: {', '.join(agent_names)}")
     
-    # Get votes from remaining agents
-    voting_tasks = []
+    # Get votes sequentially from remaining agents
+    votes = []
     for agent in remaining_agents:
-        voting_tasks.append(
-            get_agent_vote(
-                agent, 
-                runners[agent.name], 
-                session_services[agent.name], 
-                memory_services[agent.name], 
-                voting_prompt
+        # print(f"\n--- {agent.name} is voting... ---")
+        try:
+            vote = await asyncio.wait_for(
+                get_agent_vote(
+                    agent, 
+                    runners[agent.name], 
+                    session_services[agent.name], 
+                    memory_services[agent.name], 
+                    voting_prompt
+                ),
+                timeout=duration_minutes * 60 / len(remaining_agents)  # Divide time equally among agents
             )
-        )
-    
-    # Wait for all votes
-    try:
-        votes = await asyncio.wait_for(
-            asyncio.gather(*voting_tasks), 
-            timeout=duration_minutes * 60
-        )
-    except asyncio.TimeoutError:
-        print("⚠️ Voting timeout reached. Collecting available votes...")
-        votes = []
-        for task in voting_tasks:
-            if task.done():
-                votes.append(task.result())
-            else:
-                votes.append(("Timeout", {"vote": "ABSTAIN", "reasoning": "Timeout", "confidence": "NONE"}))
+            votes.append(vote)
+            # print(f"✓ {agent.name} has voted")
+        except asyncio.TimeoutError:
+            # print(f"⚠️ {agent.name} voting timeout")
+            votes.append((agent.name, {"vote": "ABSTAIN", "reasoning": "Timeout", "confidence": "NONE"}))
+        except Exception as e:
+            # print(f"⚠️ Error in {agent.name}'s voting: {str(e)}")
+            votes.append((agent.name, {"vote": "ABSTAIN", "reasoning": f"Error: {str(e)}", "confidence": "NONE"}))
+        
+        # Add a small delay between votes to make it more natural
+        await asyncio.sleep(2)
     
     # Process voting results
     return await process_round_results(votes, remaining_agents, round_number)
@@ -180,7 +178,7 @@ async def get_agent_vote(agent, runner, session_service, memory_service, voting_
         return agent.name, vote_data
     
     except Exception as e:
-        print(f"Error in agent voting for {agent.name}: {str(e)}")
+        # print(f"Error in agent voting for {agent.name}: {str(e)}")
         return agent.name, f"Error during voting phase: {str(e)}"
 
 
@@ -231,8 +229,8 @@ async def process_round_results(votes, remaining_agents, round_number):
     Returns:
         dict: Round result data
     """
-    print(f"\n📊 ROUND {round_number} VOTING RESULTS")
-    print("-" * 50)
+    # print(f"\n📊 ROUND VOTING RESULTS")
+    # print("-" * 50)
     
     # Count votes
     vote_counts = {}
@@ -240,13 +238,25 @@ async def process_round_results(votes, remaining_agents, round_number):
     total_votes = len(votes)
     majority_threshold = math.ceil(total_votes / 2)
     
+    # Store detailed vote information
+    vote_details = []
+    
     # Display individual votes and count them
     for agent_name, vote_data in votes:
-        print(f"\n 🗳️ {agent_name}:")
-        print(f"   Vote: {vote_data['vote']}")
-        print(f"   Reasoning: {vote_data['reasoning']}")
-        print(f"   Confidence: {vote_data['confidence']}")
-        print(f"   Suspicion Level: {vote_data['suspicion_level']}/10")
+        # print(f"\n 🗳️ {agent_name}:")
+        # print(f"   Vote: {vote_data['vote']}")
+        # print(f"   Reasoning: {vote_data['reasoning']}")
+        # print(f"   Confidence: {vote_data['confidence']}")
+        # print(f"   Suspicion Level: {vote_data['suspicion_level']}/10")
+        
+        # Add vote details to the list
+        vote_details.append({
+            "agent": agent_name,
+            "vote": vote_data["vote"],
+            "reasoning": vote_data["reasoning"],
+            "confidence": vote_data["confidence"],
+            "suspicion_level": vote_data["suspicion_level"]
+        })
         
         # Count the vote
         vote = vote_data['vote'].upper().strip()
@@ -266,19 +276,22 @@ async def process_round_results(votes, remaining_agents, round_number):
                 # Invalid vote counts as abstain
                 abstain_count += 1
     
-    # Determine the outcome
-    print(f"\n🎯 ROUND {round_number} OUTCOME:")
-    print("-" * 30)
+    # Wait for all votes to be processed before showing outcome
+    await asyncio.sleep(1)  # Small delay to ensure all vote displays are complete
+    
+    # print(f"\n📊 VOTING RESULTS")
+    # print("-" * 50)
     
     # Check for majority abstention
     if abstain_count >= majority_threshold:
-        print("🤝 MAJORITY ABSTAINED - No elimination this round")
+        # print("🤝 MAJORITY ABSTAINED - No elimination this round")
         return {
             "action": "no_elimination",
             "reason": "Majority abstained",
             "vote_counts": vote_counts,
             "abstain_count": abstain_count,
-            "summary": f"Majority abstained ({abstain_count}/{total_votes})"
+            "summary": f"Majority abstained ({abstain_count}/{total_votes})",
+            "vote_details": vote_details
         }
     
     # Check for majority vote on a specific agent
@@ -291,7 +304,7 @@ async def process_round_results(votes, remaining_agents, round_number):
         # Find the agent object
         eliminated_agent = next(agent for agent in remaining_agents if agent.name == eliminated_name)
         
-        print(f"⚖️ MAJORITY DECISION - {eliminated_name} is ELIMINATED ({vote_count} votes)")
+        # print(f"⚖️ MAJORITY DECISION - {eliminated_name} is ELIMINATED ({vote_count} votes)")
         
         return {
             "action": "eliminate",
@@ -299,20 +312,22 @@ async def process_round_results(votes, remaining_agents, round_number):
             "vote_count": vote_count,
             "vote_counts": vote_counts,
             "abstain_count": abstain_count,
-            "summary": f"{eliminated_name} eliminated with {vote_count}/{total_votes} votes"
+            "summary": f"{eliminated_name} eliminated with {vote_count}/{total_votes} votes",
+            "vote_details": vote_details
         }
     
     elif len(majority_votes) > 1:
         # Multiple agents got majority (shouldn't happen with proper majority calculation)
         tied_agents = [name for name, count in majority_votes]
-        print(f"🤝 IMPOSSIBLE TIE IN MAJORITY - No elimination (tied: {', '.join(tied_agents)})")
+        # print(f"🤝 IMPOSSIBLE TIE IN MAJORITY - No elimination (tied: {', '.join(tied_agents)})")
         return {
             "action": "no_elimination",
             "reason": "Tied majority votes",
             "tied_agents": tied_agents,
             "vote_counts": vote_counts,
             "abstain_count": abstain_count,
-            "summary": f"Tied majority votes between {', '.join(tied_agents)}"
+            "summary": f"Tied majority votes between {', '.join(tied_agents)}",
+            "vote_details": vote_details
         }
     
     else:
@@ -322,13 +337,13 @@ async def process_round_results(votes, remaining_agents, round_number):
             tied_candidates = [name for name, count in vote_counts.items() if count == highest_votes]
             
             if len(tied_candidates) == 1:
-                print(f"❌ NO MAJORITY - {tied_candidates[0]} had most votes ({highest_votes}) but not majority")
+                # print(f"❌ NO MAJORITY - {tied_candidates[0]} had most votes ({highest_votes}) but not majority")
                 reason = f"No majority achieved - {tied_candidates[0]} had {highest_votes}/{total_votes} votes"
             else:
-                print(f"🤝 TIE - No majority, tied at {highest_votes} votes: {', '.join(tied_candidates)}")
+                # print(f"🤝 TIE - No majority, tied at {highest_votes} votes: {', '.join(tied_candidates)}")
                 reason = f"Tie between {', '.join(tied_candidates)} with {highest_votes} votes each"
         else:
-            print("❌ NO VOTES CAST - All abstained or invalid votes")
+            # print("❌ NO VOTES CAST - All abstained or invalid votes")
             reason = "No valid votes cast"
         
         return {
@@ -336,5 +351,6 @@ async def process_round_results(votes, remaining_agents, round_number):
             "reason": reason,
             "vote_counts": vote_counts,
             "abstain_count": abstain_count,
-            "summary": reason
+            "summary": reason,
+            "vote_details": vote_details
         }

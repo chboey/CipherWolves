@@ -1,4 +1,3 @@
-
 import random
 
 def randomize_personas():

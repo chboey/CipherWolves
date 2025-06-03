@@ -3,5 +3,8 @@
 adk_documentation/
 **/__pycache__/
 **/__init__.py
-utils/__pycache__/personas.cpython-310.pyc
+__pycache__/
+*.pyc
+CipherWolves/utils/__pycache__/
+debug_scripts/
 
