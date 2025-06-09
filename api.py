@@ -1123,6 +1123,3 @@ async def get_current_round(game_id: str):
         status=game["state"]["status"]
     )
 """
-
-if __name__ == "__main__":
-    uvicorn.run("api:app", host="0.0.0.0", port=8000) 
