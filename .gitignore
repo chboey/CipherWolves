@@ -7,4 +7,5 @@ __pycache__/
 *.pyc
 CipherWolves/utils/__pycache__/
 debug_scripts/
+list_models.py
 

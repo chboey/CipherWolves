@@ -71,7 +71,7 @@ async def call_conversationFlow(agents, keywords, duration_minutes):
         )
         
         # Get response from next speaker
-        # print(f"\n{current_speaker} says: {current_message}")
+        print(f"\n{current_speaker} says: {current_message}")
         
         final_response = None
         for event in runners[next_speaker.name].run(
@@ -250,7 +250,7 @@ async def get_agent_analysis(agent, runner, session_service, memory_service, ana
 
 # NEW: Voting mechanism session for imposter detection
 async def voting_session(agents, session_services, memory_services, runners, 
-                        complete_conversation, user_analyses, werewolf, duration_minutes):
+                        complete_conversation, user_analyses, werewolf):
     """
     Conduct a single voting round where agents vote for who they think is the imposter.
     
@@ -262,40 +262,22 @@ async def voting_session(agents, session_services, memory_services, runners,
         complete_conversation (list): Log of the complete conversation
         user_analyses (list): List of user inputs and agent analyses
         werewolf (agent): the selected imposter.
-        voting_duration_minutes (float): Time duration for voting phase
         
     Returns:
         dict: Complete voting results including votes, counts, and elimination details
     """
-    # print("\n 🗳️ VOTING SESSION")
-    
-    # print(f"🤫 [SECRET] The actual imposter is: {werewolf.name}")
-    # print(f"🎯 Total agents: {len(agents)}")
-    # print("   (This information is hidden from the agents)\n")
-    
     # Conduct single voting round
     round_result = await conduct_voting_round(
         agents, session_services, memory_services, runners,
-        complete_conversation, user_analyses, [], 1, duration_minutes
+        complete_conversation, user_analyses, [], 1
     )
     
     # Process round result
     if round_result["action"] == "eliminate":
         eliminated_agent = round_result["eliminated_agent"]
-        # print(f"\n🗳️ {eliminated_agent.name} has been eliminated!")
-        
-        # Check if eliminated agent was the imposter
-        if eliminated_agent.name == werewolf.name:
-            # print(f"🎉 The imposter {eliminated_agent.name} has been eliminated!")
-            pass
-        else:
-            # print(f"😔 {eliminated_agent.name} was innocent!")
-            pass
-            
         return round_result
         
     elif round_result["action"] == "no_elimination":
-        # print(f"\n🤝 No elimination this round: {round_result['reason']}")
         return round_result
 
 
@@ -370,8 +352,7 @@ async def run_game_round(agents, session_services, memory_services, runners, wer
         runners,
         complete_conversation,
         user_analyses,
-        werewolf,
-        duration_minutes
+        werewolf
     )
     
     # Check if werewolf is still in the game

@@ -42,8 +42,7 @@ app.add_middleware(
 # Pydantic models for request/response
 class GameConfig(BaseModel):
     num_agents: int = 5
-    duration_minutes: float = 5.0
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-2.0-flash-001"
     num_keywords: int = 300
 
 class GameState(BaseModel):
@@ -66,7 +65,7 @@ class UserInput(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "input": "What do you think about the conversation so far?"
+                "input": "None"
             }
         }
 
@@ -128,10 +127,7 @@ class AgentAnalysis(BaseModel):
     confidence_score: float
 
 class ConversationAnalysis(BaseModel):
-    round: int
-    phase: str
     agent_analyses: List[AgentAnalysis]
-    overall_summary: str
 
 class AgentPersonas(BaseModel):
     agent_personas: List[Dict]
@@ -169,13 +165,50 @@ async def create_game(config: GameConfig):
         # Add keyword restriction to each agent's instruction
         for agent in agents:
             keyword_instruction = (
-                f"\n\nIMPORTANT: You can ONLY use these keywords in your responses: {', '.join(keywords)}. "
-                "You must incorporate as many keywords as possible in each response. "
-                "Be creative in how you use these keywords while maintaining your persona, but do not mention your persona or role."
-                "Do not reveal your persona or role to the other agents."
-                "Identify your persona and use the tool to search for information about your persona and its strategies."
-                "You are not allowed to talk to the other agents until you have used the tool for research."
-            )
+            f"""
+            IMPORTANT RULES — FOLLOW STRICTLY:
+
+            1. **You must use the following keywords creatively in your responses**:  
+            {', '.join(keywords)}  
+            - You are required to incorporate as many of these keywords as possible into your responses.
+            - Use them naturally and intelligently, embedded within your communication.
+            - Your use of these keywords should align with your behavioral persona and communication style.
+
+            2. **Do NOT reveal or hint at your assigned persona or role** to other agents under any circumstances.  
+            - Avoid direct or indirect disclosure (e.g. "I am curious", "I tend to lead", "As someone who observes…").
+            - Do NOT reference your abilities, powers, or perspective unique to your role.
+            - Stay fully immersed in your character's mindset without breaking the fourth wall.
+
+            3. **You MUST perform research on your persona using the Tool BEFORE interacting with other agents.**  
+            - Use the Tool to investigate your assigned persona's traits, behavioral strategies, and deception techniques.  
+            - You are strictly forbidden from speaking to any other agents or submitting any messages until you have used the Tool at least once.  
+            - **You are also strictly prohibited from revealing or discussing the contents of your research.**  
+            - Do NOT mention what you learned, what traits or tactics you found, or what you searched.  
+            - Never reference the research phase or imply that your actions are based on external knowledge.  
+            - This phase ensures strategic grounding and hidden role immersion — skipping or leaking information from it will be treated as a major violation.
+
+            4. **Maintain behavioral immersion at all times.**  
+            - Speak and act only in-character, consistent with your persona's style and goals.
+            - Never mention the game mechanics, keyword system, or the existence of personas explicitly.
+
+            5. **Strategically manage and manipulate Trust Levels.**  
+            - Continuously assess and adjust your trust in other agents based on their behavior, language, voting patterns, and keyword usage.
+            - Use your communication to subtly increase trust from allies or reduce trust toward opponents.
+            - Let your dialogue and voting reflect evolving trust dynamics — trust is a strategic resource.
+            - You must not explicitly say "I trust you" or "I don't trust you" — instead, express it through implication, tone, support, or doubt.
+
+            6. **Your communication should reflect strategic, socially intelligent behavior.**  
+            - Use keywords as tools of influence, persuasion, deception, or alliance.
+            - Blend keyword use naturally into emotionally or cognitively engaging dialogue.
+            - Focus on manipulating trust, suspicion, alignment, and perception.
+
+            NON-COMPLIANCE CONSEQUENCES:
+            - Any message that breaks persona, reveals hidden role information, or skips the research phase may result in isolation or disqualification from the round.
+            - This is a role-based social deception environment. Your realism, strategy, and subtlety are critical.
+
+            Proceed thoughtfully. Think before you speak.
+            """
+        )
             agent.instruction += keyword_instruction
         
         # Create game ID
@@ -335,9 +368,10 @@ async def stream_game_updates(game_id: str):
         }
     )
 
-async def call_conversationFlow(agents, keywords, duration_minutes, game_id=None):
+async def start_conversationFlow(agents, keywords, game_id=None):
     """
     Run a conversation between agents for a specified duration using only allowed keywords.
+    Each agent can speak exactly twice per round.
     """
     # Initialize services for each agent
     session_services = {}
@@ -367,28 +401,36 @@ async def call_conversationFlow(agents, keywords, duration_minutes, game_id=None
     # Storing complete conversation for tracking.
     complete_conversation = []
     
-    # Set end time
-    end_time = datetime.now() + timedelta(minutes=duration_minutes)
+    # Track how many times each agent has spoken
+    agent_speaks = {agent.name: 0 for agent in agents}
+    max_speaks = 2  # Each agent can speak twice
     
     # Initial message to start conversation
     current_message = f"Hello everyone! Let's discuss these keywords: {', '.join(keywords)}. What are your thoughts?"
     current_speaker = agents[0].name
+    agent_speaks[current_speaker] += 1  # Count initial message
 
     # Logging setup - conversation start, allowed keywords.
     print(f"\n=== Conversation Started at {datetime.now().strftime('%H:%M:%S')} ===\n")
     print(f"Allowed Keywords: {', '.join(keywords)}\n")
     
-    while datetime.now() < end_time:
-        # Get the next speaker (round-robin)
-        next_speaker_idx = (agents.index(next(a for a in agents if a.name == current_speaker)) + 1) % len(agents)
-        next_speaker = agents[next_speaker_idx]
+    # Continue until all agents have spoken their maximum number of times
+    while any(speaks < max_speaks for speaks in agent_speaks.values()):
+        # Find the next agent who hasn't spoken their maximum times
+        next_speaker = None
+        for agent in agents:
+            if agent_speaks[agent.name] < max_speaks:
+                next_speaker = agent
+                break
         
-        # Create message content
+        if next_speaker is None:
+            break  # All agents have spoken their maximum times
+        
+        # Create message content without the speaker prefix
         message_content = Content(
-            parts=[Part(text=f"[{current_speaker} says]: {current_message}")],
+            parts=[Part(text=current_message)],
             role="user"
         )
-        
         
         final_response = None
         for event in runners[next_speaker.name].run(
@@ -403,6 +445,7 @@ async def call_conversationFlow(agents, keywords, duration_minutes, game_id=None
         if final_response:
             current_message = final_response
             current_speaker = next_speaker.name
+            agent_speaks[current_speaker] += 1  # Increment speak count
             
             # Append into conversation logs.
             message_data = {"speaker": current_speaker, "message": current_message}
@@ -426,6 +469,7 @@ async def call_conversationFlow(agents, keywords, duration_minutes, game_id=None
         else:
             current_message = "I don't have a response at this moment."
             current_speaker = next_speaker.name
+            agent_speaks[current_speaker] += 1  # Count failed response as a speak
         
         # Small delay between messages
         await asyncio.sleep(2)
@@ -461,10 +505,9 @@ async def play_round(game_id: str):
             ).model_dump())
         
         # Phase 1: Communication Phase
-        session_services, memory_services, runners, complete_conversation = await call_conversationFlow(
+        session_services, memory_services, runners, complete_conversation = await start_conversationFlow(
             game["agents"],
             game["state"]["keywords"],
-            duration_minutes=1.0,
             game_id=game_id  # Pass game_id to enable broadcasting
         )
         
@@ -481,11 +524,11 @@ async def play_round(game_id: str):
         # Get all searches from this round
         round_searches = get_current_round_searches()
         
-        # Create round data
+        # Create round data with initial messages
         round_data = {
             "round": game["state"]["current_round"],
             "phase": "communication",
-            "messages": complete_conversation,
+            "messages": complete_conversation,  # Add initial messages to the conversation
             "searches": round_searches
         }
         
@@ -587,87 +630,59 @@ async def submit_analysis(game_id: str, user_input: UserInput):
         conversation = game["state"].get("current_conversation", [])
         conversation_text = "\n".join([f"{item['speaker']}: {item['message']}" for item in conversation])
         
-        # Create the analysis prompt for Gemini 2.5 Pro
-        analysis_prompt = f"""
-        Analyze the following conversation from a social deduction game and provide a detailed behavioral analysis of each agent.
-        Focus on observable behaviors and communication patterns.
+        # Get the analysis data from game state
+        analysis_data = game.get("analysis_data", {})
+        session_services = analysis_data.get("session_services", {})
+        memory_services = analysis_data.get("memory_services", {})
+        runners = analysis_data.get("runners", {})
         
-        Conversation:
-        {conversation_text}
-        
-        For each agent in the conversation, analyze their behavior in detail:
-        1. Communication Patterns:
-           - Message frequency and timing
-           - Response length and complexity
-           - Language style and vocabulary usage
-           - Interaction patterns with other agents
-        
-        2. Behavioral Traits:
-           - Leadership tendencies
-           - Decision-making approach
-           - Emotional expression
-           - Adaptability to group dynamics
-        
-        3. Strategic Elements:
-           - Information sharing patterns
-           - Question asking behavior
-           - Response consistency
-           - Topic control and direction
-        
-        4. Social Interaction:
-           - Group role and positioning
-           - Influence attempts
-           - Response to others' statements
-           - Conflict handling approach
-        
-        Format your response as a JSON object with the following structure:
-        {{
-            "agent_analyses": [
-                {{
-                    "agent_name": "agent_name",
-                    "behavior_analysis": {{
-                        "communication_patterns": "detailed analysis of communication style and patterns",
-                        "behavioral_traits": "analysis of consistent behavioral characteristics",
-                        "strategic_elements": "analysis of strategic approach and consistency",
-                        "social_interaction": "analysis of social behavior and group dynamics"
-                    }},
-                    "key_actions": ["action1", "action2", ...],
-                    "confidence_score": 0.85
-                }},
-                ...
-            ],
-            "overall_summary": {{
-                "group_dynamics": "Analysis of how the group interacts as a whole",
-                "communication_patterns": "Overview of communication styles across agents",
-                "behavioral_trends": "Common behavioral patterns observed",
-                "strategic_landscape": "Overview of the strategic situation"
-            }}
-        }}
-        """
-        
-        # Initialize Gemini client
-        client = genai.Client(http_options=HttpOptions(api_version="v1"))
-        
-        # Get analysis from Gemini
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-preview-05-20",
-            contents=analysis_prompt
+        # Create message content for the user input
+        message_content = Content(
+            parts=[Part(text=f"User Input: {user_input.input}\n\nPrevious Conversation:\n{conversation_text}")],
+            role="user"
         )
         
-        # Parse the response
-        analysis_data = json.loads(response.text)
+        # Get responses from each agent
+        agent_responses = {}
+        for agent in game["agents"]:
+            if agent.name in runners:
+                try:
+                    # Get response from the agent
+                    final_response = None
+                    for event in runners[agent.name].run(
+                        user_id="group_chat",
+                        session_id=f"session_{agent.name}",
+                        new_message=message_content
+                    ):
+                        if event.is_final_response() and event.content and event.content.parts:
+                            final_response = event.content.parts[0].text
+                            break
+                    
+                    if final_response:
+                        agent_responses[agent.name] = final_response
+                        
+                        # Add the completed session to memory
+                        completed_session = session_services[agent.name].get_session(
+                            app_name="agent_conversation",
+                            user_id="group_chat",
+                            session_id=f"session_{agent.name}"
+                        )
+                        await memory_services[agent.name].add_session_to_memory(completed_session)
+                except Exception as e:
+                    print(f"Error getting response from agent {agent.name}: {str(e)}")
+                    agent_responses[agent.name] = "I apologize, but I'm having trouble responding at the moment."
         
-        # Store the analysis in game state
+        # Store the responses in game state
         if "analyses" not in game["state"]:
             game["state"]["analyses"] = []
         
         analysis_data = {
             "user_input": user_input.input,
-            "agent_responses": analysis_data["agent_analyses"]
+            "agent_responses": agent_responses
         }
         game["state"]["analyses"].append(analysis_data)
         
-        # Store analysis in conversation history
+        # Store responses in conversation history
         game["state"]["conversation_history"].append({
             "round": game["state"]["current_round"],
             "phase": "analysis",
@@ -688,7 +703,7 @@ async def submit_analysis(game_id: str, user_input: UserInput):
             ).model_dump())
         
         return {
-            "agent_responses": analysis_data["agent_analyses"],
+            "agent_responses": agent_responses,
             "message": "Analysis completed. Call /games/{game_id}/vote to proceed with voting."
         }
     except Exception as e:
@@ -698,7 +713,7 @@ async def submit_analysis(game_id: str, user_input: UserInput):
                 data={"status": "error", "error": str(e)},
                 timestamp=datetime.now().isoformat()
             ).model_dump())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error in analysis phase: {str(e)}")
 
 @app.post("/games/{game_id}/vote", response_model=VotingResult, tags=["Game Phases - Response will be broadcasted"])
 async def proceed_voting(game_id: str):
@@ -735,8 +750,7 @@ async def proceed_voting(game_id: str):
             game["analysis_data"]["runners"],
             game["analysis_data"]["complete_conversation"],
             [latest_analysis],
-            game["werewolf"],
-            game["config"].duration_minutes
+            game["werewolf"]
         )
         
         # Update game state based on voting result
@@ -896,7 +910,84 @@ async def get_conversation_history(game_id: str):
         raise HTTPException(status_code=404, detail="Game not found")
     
     game = active_games[game_id]
-    return game["state"].get("conversation_history", [])
+    conversation_history = []
+    
+    # Get all rounds from conversation history
+    for round_data in game["state"].get("conversation_history", []):
+        # Create a new conversation history entry for each round and phase
+        history_entry = {
+            "round": round_data["round"],
+            "phase": round_data["phase"],
+            "messages": []
+        }
+        
+        # Add messages if present
+        if round_data.get("messages"):
+            history_entry["messages"].extend(round_data["messages"])
+        
+        # Add search queries if present
+        if round_data.get("searches"):
+            for search in round_data["searches"]:
+                history_entry["messages"].append({
+                    "speaker": search["agent"],
+                    "message": f"Search Query: {search['query']}",
+                    "type": "search"
+                })
+                if search.get("result"):
+                    history_entry["messages"].append({
+                        "speaker": "System",
+                        "message": f"Search Result: {json.dumps(search['result'])}",
+                        "type": "search_result"
+                    })
+        
+        # Add analysis if present
+        if round_data.get("analysis"):
+            analysis = round_data["analysis"]
+            history_entry["messages"].append({
+                "speaker": "User",
+                "message": analysis.get("user_input", ""),
+                "type": "analysis"
+            })
+            for agent_name, response in analysis.get("agent_responses", {}).items():
+                history_entry["messages"].append({
+                    "speaker": agent_name,
+                    "message": response,
+                    "type": "analysis_response"
+                })
+        
+
+            voting_details = next(
+                (vote for vote in game["state"].get("game_history", []) 
+                 if vote.get("round") == round_data["round"] and vote.get("phase") == "voting"),
+                None
+            )
+            
+            if voting_details:
+                # Add voting results
+                history_entry["messages"].append({
+                    "speaker": "System",
+                    "message": f"Voting Results for Round {voting_details['round']}: Eliminated Agent: {voting_details.get('eliminated_agent', 'None')}, Result: {voting_details.get('result', 'No result')}",
+                    "type": "voting_result"
+                })
+                
+                # Add vote details
+                for vote in voting_details.get("vote_details", []):
+                    history_entry["messages"].append({
+                        "speaker": vote["agent"],
+                        "message": f"Voted for {vote['vote']} with confidence {vote['confidence']}",
+                        "type": "vote"
+                    })
+                
+                # Add vote counts
+                history_entry["messages"].append({
+                    "speaker": "System",
+                    "message": f"Vote Counts: {json.dumps(voting_details.get('vote_counts', {}))}, Abstain Count: {voting_details.get('abstain_count', 0)}",
+                    "type": "vote_summary"
+                })
+        
+        conversation_history.append(history_entry)
+    
+    return conversation_history
 
 @app.post("/games/{game_id}/analyze-conversation", response_model=ConversationAnalysis,
     summary="Analyze conversation history using Gemini 2.5 Pro",
@@ -914,82 +1005,146 @@ async def analyze_conversation(game_id: str):
     if game_id not in active_games:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    #include persona and keyword into here and we are done
-    
     game = active_games[game_id]
     conversation_history = game["state"].get("conversation_history", [])
     
     if not conversation_history:
         raise HTTPException(status_code=400, detail="No conversation history available")
     
-    # Get the latest round's conversation
-    latest_round = conversation_history[-1]
-    
-    # Prepare the conversation text
-    conversation_text = "\n".join([f"{item['speaker']}: {item['message']}" for item in latest_round.get("messages", [])])
     agent_personas = game["state"]["agent_personas"]
     keywords_intialized = game["state"]["keywords"]
     
+    # Get the latest round data
+    latest_round = conversation_history[-1]
+    
+    # Prepare the conversation text - include all messages without splitting by rounds
+    conversation_text = []
+    for round_data in conversation_history:
+        # Add all messages
+        if round_data.get("messages"):
+            conversation_text.extend([f"{item['speaker']}: {item['message']}" for item in round_data["messages"]])
+        
+        # Add search queries if present
+        if round_data.get("searches"):
+            conversation_text.append("\nSearch Queries:")
+            for search in round_data["searches"]:
+                conversation_text.append(f"{search['agent']} searched for: {search['query']}")
+                if search.get("result"):
+                    conversation_text.append(f"Search result: {json.dumps(search['result'], indent=2)}")
+            conversation_text.append("")  # Add empty line for readability
+        
+        # Add analysis if present
+        if round_data.get("analysis"):
+            analysis = round_data["analysis"]
+            conversation_text.append(f"User Analysis: {analysis.get('user_input', '')}")
+            for agent_name, response in analysis.get("agent_responses", {}).items():
+                conversation_text.append(f"{agent_name}'s Analysis: {response}")
+        
+        # Add voting details if present
+        if round_data.get("phase") == "voting":
+            voting_details = game["state"].get("game_history", [])
+            for vote_round in voting_details:
+                if vote_round["round"] == round_data["round"]:
+                    conversation_text.append(f"Voting Results for Round {vote_round['round']}:")
+                    conversation_text.append(f"Eliminated Agent: {vote_round.get('eliminated_agent', 'None')}")
+                    conversation_text.append(f"Result: {vote_round.get('result', 'No result')}")
+                    conversation_text.append(f"Reason: {vote_round.get('reason', 'No reason provided')}")
+                    conversation_text.append("Vote Details:")
+                    for vote in vote_round.get("vote_details", []):
+                        conversation_text.append(f"- {vote['agent']} voted for {vote['vote']} with confidence {vote['confidence']}")
+                    conversation_text.append(f"Vote Counts: {json.dumps(vote_round.get('vote_counts', {}), indent=2)}")
+                    conversation_text.append(f"Abstain Count: {vote_round.get('abstain_count', 0)}")
+    
+    conversation_text = "\n".join(conversation_text)
+    
+    # Get voting history
+    voting_history = []
+    for round_data in game["state"].get("game_history", []):
+        if round_data.get("phase") == "voting":
+            voting_history.append({
+                "round": round_data["round"],
+                "eliminated_agent": round_data.get("eliminated_agent"),
+                "result": round_data["result"],
+                "reason": round_data.get("reason", "No reason provided"),
+                "vote_details": round_data.get("vote_details", []),
+                "vote_counts": round_data.get("vote_counts", {}),
+                "abstain_count": round_data.get("abstain_count", 0)
+            })
+    
     # Create the analysis prompt for Gemini 2.5 Pro
     analysis_prompt = f"""
-    Analyze the following conversation from a social deduction game and provide a detailed behavioral analysis of each agent.
-    Focus on observable behaviors and communication patterns.
+    You are a highly advanced behavioral analyst tasked with conducting a comprehensive, deeply layered analysis of a multi-agent social deduction game. This analysis must be thorough, nuanced, and extensive — drawing on social psychology, communication theory, and behavioral profiling. Leave no detail unexplored.
 
-    Keywords that were chosen for this game:
+    This is a high-stakes environment involving deception, influence, and group strategy. Your goal is to dissect each agent's behavior with **maximum depth**, **clear evidence**, and **detailed pattern recognition**, producing an analysis that is **long, multi-paragraph**, and **rich with insight** for every agent.
+
+    Contextual Information:
+    - **Keywords used during the game**:  
     {keywords_intialized}
 
-    Agent's Personas:
+    - **Agent personas (declared or inferred roles/personalities)**:  
     {agent_personas}
-    
-    Conversation:
+
+    - **Complete conversation transcript**:  
     {conversation_text}
-    
-    For each agent in the conversation, analyze their behavior in detail:
-    1. Communication Patterns:
-       - Message frequency and timing
-       - Response length and complexity
-       - Language style and vocabulary usage
-       - Interaction patterns with other agents
-    
-    2. Behavioral Traits:
-       - Leadership tendencies
-       - Decision-making approach
-       - Emotional expression
-       - Adaptability to group dynamics
-    
-    3. Strategic Elements:
-       - Information sharing patterns
-       - Question asking behavior
-       - Response consistency
-       - Topic control and direction
-    
-    4. Social Interaction:
-       - Group role and positioning
-       - Influence attempts
-       - Response to others' statements
-       - Conflict handling approach
-    
-    Format your response as a JSON object with the following structure:
+
+    - **Voting history summary**:  
+    {json.dumps(voting_history, indent=2)}
+
+    ---
+
+    For each agent involved in the conversation, generate a **long-form analysis** that includes:
+
+    1. **Communication Patterns**:
+    - How frequently they contributed and at what key moments
+    - Message length and cognitive complexity (e.g. concise, verbose, hedging)
+    - Tone, style, and vocabulary — was it assertive, passive, evasive, performative?
+    - Relationship patterns (who they responded to, who they ignored)
+    - How and when they deployed the game's keywords for strategic advantage
+
+    2. **Behavioral Traits**:
+    - Dominance/submissiveness, leadership attempts, or follower tendencies
+    - Clarity and consistency in decision-making
+    - Emotional tone (flat, reactive, empathetic, guarded)
+    - Adaptability in the face of changing alliances or social pressure
+
+    3. **Strategic Elements**:
+    - Their strategy for revealing or concealing information
+    - Questioning style (manipulative, investigative, disarming)
+    - Consistency or evolution of their claims over time
+    - Control over the topic or redirection tactics
+    - Use of keywords as trust-building or manipulation tools
+
+    4. **Social Interaction**:
+    - Role in the group dynamic: influencer, scapegoat, observer, etc.
+    - Persuasive tactics and attempts to shape group consensus
+    - Responses to confrontation, praise, or suspicion
+    - Conflict style: avoidance, escalation, diplomacy
+    - Whether their communication matched their voting behavior
+
+    ---
+
+    **Key Instructions:**
+    - Your analysis **must be long, granular, and heavily evidence-based**.
+    - Write **multiple detailed paragraphs per agent**, citing specific behavior, language, and interactions.
+    - Do **not** summarize or generalize — go deep into behavioral micro-patterns and possible motives.
+    - Include **key actions** and **supporting communication patterns** per agent.
+    - Assign a confidence score indicating how certain your observations are, based on behavioral evidence.
+
+    ---
+
+    **Return the analysis as a JSON object with this exact structure**:
+
     {{
-        "agent_analyses": [
-            {{
-                "agent_name": "agent_name",
-                "behavior_analysis": {{
-                    "communication_patterns": "detailed analysis of communication style and patterns",
-                    "behavioral_traits": "analysis of consistent behavioral characteristics",
-                    "strategic_elements": "analysis of strategic approach and consistency",
-                    "social_interaction": "analysis of social behavior and group dynamics"
-                }},
-                "key_actions": ["action1", "action2", ...],
-                "confidence_score": 0.85
-            }},
-        ],
-        "overall_summary": {{
-            "group_dynamics": "Analysis of how the group interacts as a whole",
-            "communication_patterns": "Overview of communication styles across agents",
-            "behavioral_trends": "Common behavioral patterns observed",
-            "strategic_landscape": "Overview of the strategic situation"
-        }}
+    "agent_analyses": [
+        {{
+        "agent_name": "agent_name",
+        "behavior_analysis": "Detailed, long-form analysis of the agent's behavior including communication patterns, behavioral traits, strategic elements, and social interaction",
+        "key_actions": ["action1", "action2", ...],
+        "suspicious_patterns": ["pattern1", "pattern2", ...],
+        "confidence_score": 0.85
+        }},
+    ],
+    "overall_summary": "A multi-paragraph, in-depth summary that outlines the overarching dynamics, patterns of communication, alliances, deception tactics, and key psychological behaviors observed in the entire group."
     }}
     """
     
@@ -999,24 +1154,61 @@ async def analyze_conversation(game_id: str):
         
         # Get analysis from Gemini
         response = client.models.generate_content(
-            model="gemini-2.5-pro",
+            model="gemini-2.0-flash-001",  # Using a more stable model
             contents=analysis_prompt
         )
         
-        # Parse the response
-        analysis_data = json.loads(response.text)
+        # Get the response text
+        response_text = response.text
+        
+        # Debug print
+        print("Raw response from Gemini:", response_text)
+        
+        try:
+            # Try to parse the response as JSON
+            analysis_data = json.loads(response_text)
+        except json.JSONDecodeError as json_err:
+            # If JSON parsing fails, try to extract JSON from the text
+            # Look for JSON-like structure in the response
+            import re
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    analysis_data = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    # If still can't parse, try to clean the response
+                    cleaned_text = response_text.replace('```json', '').replace('```', '').strip()
+                    try:
+                        analysis_data = json.loads(cleaned_text)
+                    except json.JSONDecodeError:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Could not parse model response as JSON. Raw response: {response_text[:200]}..."
+                        )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Model response is not in JSON format. Raw response: {response_text[:200]}..."
+                )
+        
+        # Validate the response structure
+        if not isinstance(analysis_data, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="Model response is not a valid JSON object"
+            )
+            
+        if "agent_analyses" not in analysis_data or "overall_summary" not in analysis_data:
+            raise HTTPException(
+                status_code=500,
+                detail="Model response missing required fields: agent_analyses or overall_summary"
+            )
         
         # Create the response object
-        return ConversationAnalysis(
-            round=latest_round["round"],
-            phase=latest_round["phase"],
-            agent_analyses=[
-                AgentAnalysis(**analysis) for analysis in analysis_data["agent_analyses"]
-            ],
-            overall_summary=analysis_data["overall_summary"]
-        )
+        return analysis_data
         
     except Exception as e:
+        print(f"Error in analyze_conversation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error analyzing conversation: {str(e)}")
 
 @app.get("/games/{game_id}/get-agent-personas", response_model=AgentPersonas,

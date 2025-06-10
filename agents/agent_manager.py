@@ -129,7 +129,7 @@ def create_web_search_tool(agent_name: str):
     
     return FunctionTool(func=agent_web_search)
 
-def initialize_agents(num_agents, model="gemini-2.0-flash"):
+def initialize_agents(num_agents, model="gemini-2.0-flash-001"):
     """
     Initialize n number of agents with random personas.
     One random agent will be selected as the werewolf.

@@ -4,7 +4,7 @@ import math
 from google.genai.types import Content, Part
 
 async def conduct_voting_round(remaining_agents, session_services, memory_services, runners,
-                              complete_conversation, user_analyses, game_history, round_number, duration_minutes):
+                              complete_conversation, user_analyses, game_history, round_number):
     """
     Conduct a single voting round.
     
@@ -35,7 +35,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     agent_names = [agent.name for agent in remaining_agents]
     
     voting_prompt = f"""
-    You are participating in the Round of the imposter elimination game.
+    You are participating in the Round of the werewolf elimination game.
     
     CURRENT SITUATION:
     - Remaining Players: {', '.join(agent_names)}
@@ -49,7 +49,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     {history_context}
     
     VOTING INSTRUCTIONS:
-    Based on all available information, vote to ELIMINATE one player other than yourself that you believe is the imposter.
+    Based on all available information, vote to ELIMINATE one player other than yourself that you believe is the werewolf.
     You would be fed previous chat history, user analysis and game history, if you see ur name, refer to yourself as I. Example: As I have said earlier.
     
     Analyze these aspects:
@@ -60,13 +60,13 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     
     VOTING OPTIONS:
     - Vote to ELIMINATE a specific agent that is not yourself.
-    - ABSTAIN: If you don't have enough evidence (but be careful - abstaining helps the imposter!)
+    - ABSTAIN: If you don't have enough evidence (but be careful - abstaining helps the werewolf!)
     
     IMPORTANT GAME RULES:
     - If MAJORITY votes for the same agent → That agent is ELIMINATED
     - If MAJORITY abstains → No elimination this round
     - If there's a TIE → No elimination this round
-    - Game continues until imposter is found or only 2 players remain
+    - Game continues until werewolf is found or only 2 players remain
     
     Please provide your vote in this EXACT format:
     VOTE: [AGENT_NAME or ABSTAIN]
@@ -81,32 +81,19 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     SUSPICION_LEVEL: 8
     """
     
-    # print(f"\n🗳️ Starting Voting Round...")
-    # print(f"⏰ Voting duration: {duration_minutes} minutes")
-    # print(f"👥 Voting participants: {', '.join(agent_names)}")
-    
     # Get votes sequentially from remaining agents
     votes = []
     for agent in remaining_agents:
-        # print(f"\n--- {agent.name} is voting... ---")
         try:
-            vote = await asyncio.wait_for(
-                get_agent_vote(
-                    agent, 
-                    runners[agent.name], 
-                    session_services[agent.name], 
-                    memory_services[agent.name], 
-                    voting_prompt
-                ),
-                timeout=duration_minutes * 60 / len(remaining_agents)  # Divide time equally among agents
+            vote = await get_agent_vote(
+                agent, 
+                runners[agent.name], 
+                session_services[agent.name], 
+                memory_services[agent.name], 
+                voting_prompt
             )
             votes.append(vote)
-            # print(f"✓ {agent.name} has voted")
-        except asyncio.TimeoutError:
-            # print(f"⚠️ {agent.name} voting timeout")
-            votes.append((agent.name, {"vote": "ABSTAIN", "reasoning": "Timeout", "confidence": "NONE"}))
         except Exception as e:
-            # print(f"⚠️ Error in {agent.name}'s voting: {str(e)}")
             votes.append((agent.name, {"vote": "ABSTAIN", "reasoning": f"Error: {str(e)}", "confidence": "NONE"}))
         
         # Add a small delay between votes to make it more natural
