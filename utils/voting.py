@@ -17,12 +17,12 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     # Include user analysis context
     analysis_context = ""
     if user_analyses:
-        analysis_context = "\n\nUser Questions and Agent Responses:\n"
+        analysis_context = "\n\nHUMAN USER'S ANALYSIS PHASE:\n"
         for analysis in user_analyses:
-            analysis_context += f"\nUser asked: {analysis['user_input']}\n"
+            analysis_context += f"\nHUMAN USER asked: {analysis['user_input']}\n"
             for agent_name, response in analysis['agent_responses'].items():
                 if any(agent.name == agent_name for agent in remaining_agents):  # Only include remaining agents
-                    analysis_context += f"{agent_name} responded: {response[:200]}...\n"
+                    analysis_context += f"{agent_name} responded to the HUMAN USER: {response[:200]}...\n"
     
     # Include game history context
     history_context = ""
@@ -50,13 +50,19 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     
     VOTING INSTRUCTIONS:
     Based on all available information, vote to ELIMINATE one player other than yourself that you believe is the werewolf.
-    You would be fed previous chat history, user analysis and game history, if you see ur name, refer to yourself as I. Example: As I have said earlier.
+    You have been provided with:
+    1. The original conversation between agents
+    2. Questions asked by the HUMAN USER during the analysis phase and how each agent responded
+    3. Previous voting history
+    
+    When you see your name, refer to yourself as I. Example: As I have said earlier.
     
     Analyze these aspects:
     1. Keyword usage patterns and consistency
     2. Response patterns and behavioral analysis
     3. Previous voting patterns and defensive behavior
     4. Overall suspicion level based on all interactions
+    5. How agents responded to the HUMAN USER's analysis questions - were they evasive, defensive, or cooperative?
     
     VOTING OPTIONS:
     - Vote to ELIMINATE a specific agent that is not yourself.
@@ -76,7 +82,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     
     Example:
     VOTE: Agent_B
-    REASONING: Agent_B's responses have been inconsistent and their keyword usage feels forced.
+    REASONING: Agent_B's responses have been inconsistent and their keyword usage feels forced. They also gave evasive answers to the HUMAN USER's analysis questions, which is suspicious behavior.
     CONFIDENCE: HIGH
     SUSPICION_LEVEL: 8
     """

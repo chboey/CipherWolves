@@ -14,8 +14,7 @@ from agents.agent_manager import (
 )
 from agents.agent_interaction import voting_session
 from utils.keywords import generate_keywords
-from datetime import datetime, timedelta
-import uvicorn
+from datetime import datetime
 import json
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -206,7 +205,7 @@ async def create_game(config: GameConfig):
             - Any message that breaks persona, reveals hidden role information, or skips the research phase may result in isolation or disqualification from the round.
             - This is a role-based social deception environment. Your realism, strategy, and subtlety are critical.
 
-            Proceed thoughtfully. Think before you speak.
+            Proceed thoughtfully. Think before you speak. Use the Tool to research your persona.
             """
         )
             agent.instruction += keyword_instruction
@@ -405,26 +404,81 @@ async def start_conversationFlow(agents, keywords, game_id=None):
     agent_speaks = {agent.name: 0 for agent in agents}
     max_speaks = 2  # Each agent can speak twice
     
-    # Initial message to start conversation
-    current_message = f"Hello everyone! Let's discuss these keywords: {', '.join(keywords)}. What are your thoughts?"
-    current_speaker = agents[0].name
-    agent_speaks[current_speaker] += 1  # Count initial message
-
-    # Logging setup - conversation start, allowed keywords.
-    print(f"\n=== Conversation Started at {datetime.now().strftime('%H:%M:%S')} ===\n")
-    print(f"Allowed Keywords: {', '.join(keywords)}\n")
+    # Track tool usage for each agent
+    agent_tool_usage = {agent.name: False for agent in agents}
     
+    # Initial message to start conversation
+    if game_id and game_id in active_games:
+        current_round = active_games[game_id]["state"]["current_round"]
+        if current_round == 1:
+            current_message = f"Hello everyone! Let's discuss these keywords: {', '.join(keywords)}. What are your thoughts?"
+            current_speaker = "system"
+            complete_conversation.append({"speaker": current_speaker, "message": current_message})
+        else:
+            current_message = "Hello everyone! Let's continue our discussion. What are your thoughts?"
+    else:
+        current_message = f"Hello everyone! Let's discuss these keywords: {', '.join(keywords)}. What are your thoughts?"
+    
+    # Don't increment agent_speaks since this is a system message
+
     # Continue until all agents have spoken their maximum number of times
     while any(speaks < max_speaks for speaks in agent_speaks.values()):
         # Find the next agent who hasn't spoken their maximum times
+        # Get the current minimum speak count
+        min_speaks = min(agent_speaks.values())
+        
+        # Find the first agent who has spoken the minimum number of times
         next_speaker = None
         for agent in agents:
-            if agent_speaks[agent.name] < max_speaks:
+            if agent_speaks[agent.name] == min_speaks:
                 next_speaker = agent
                 break
         
         if next_speaker is None:
             break  # All agents have spoken their maximum times
+            
+        # Check if agent has used the tool
+        if not agent_tool_usage[next_speaker.name]:
+            # Force tool usage before speaking
+            tool_message = Content(
+                parts=[Part(text=f"""
+                IMPORTANT: You MUST use the Tool to research your persona before speaking.
+                This is a mandatory requirement. You cannot speak until you have used the Tool.
+                
+                Current conversation:
+                {current_message}
+                
+                Use the Tool now to research your persona and then respond to the conversation.
+                """)],
+                role="user"
+            )
+            
+            # Get tool usage response
+            tool_response = None
+            for event in runners[next_speaker.name].run(
+                user_id="group_chat",
+                session_id=f"session_{next_speaker.name}",
+                new_message=tool_message
+            ):
+                if event.is_final_response() and event.content and event.content.parts:
+                    tool_response = event.content.parts[0].text
+                    break
+            
+            if tool_response:
+                agent_tool_usage[next_speaker.name] = True
+                # Broadcast tool usage
+                if game_id and game_id in active_streams:
+                    await active_streams[game_id].put(GameUpdate(
+                        type="tool_usage",
+                        data={
+                            "agent": next_speaker.name,
+                            "message": "Agent has completed required research using the Tool"
+                        },
+                        timestamp=datetime.now().isoformat()
+                    ).model_dump())
+            else:
+                # Skip this agent if they fail to use the tool
+                continue
         
         # Create message content without the speaker prefix
         message_content = Content(
@@ -605,7 +659,7 @@ async def submit_analysis(game_id: str, user_input: UserInput):
             game["state"]["conversation_history"].append({
                 "round": game["state"]["current_round"],
                 "phase": "analysis",
-                "messages": [{"speaker": "user", "message": user_input.input or ""}],
+                "messages": [{"speaker": "User", "message": user_input.input or ""}],
                 "analysis": {"user_input": user_input.input or "", "agent_responses": {}}
             })
             
@@ -638,9 +692,22 @@ async def submit_analysis(game_id: str, user_input: UserInput):
         
         # Create message content for the user input
         message_content = Content(
-            parts=[Part(text=f"User Input: {user_input.input}\n\nPrevious Conversation:\n{conversation_text}")],
-            role="user"
-        )
+            parts=[Part(text=f"""
+        IMPORTANT: This is a question from the HUMAN USER, not from another agent.
+
+        USER'S QUESTION: {user_input.input}
+
+        Previous Conversation:
+        {conversation_text}
+
+        Please analyze the conversation and respond to the user's question above. Remember to:
+        1. Use the required keywords naturally in your response
+        2. Stay in character and maintain your persona
+        3. Do not reveal your role
+        4. Consider how your response might affect others' perception of you
+        """)],
+                    role="user"
+                )
         
         # Get responses from each agent
         agent_responses = {}
@@ -660,6 +727,18 @@ async def submit_analysis(game_id: str, user_input: UserInput):
                     
                     if final_response:
                         agent_responses[agent.name] = final_response
+                        
+                        # Broadcast each agent's analysis response immediately
+                        if game_id in active_streams:
+                            await active_streams[game_id].put(GameUpdate(
+                                type="analysis_response",
+                                data={
+                                    "agent": agent.name,
+                                    "response": final_response,
+                                    "user_input": user_input.input
+                                },
+                                timestamp=datetime.now().isoformat()
+                            ).model_dump())
                         
                         # Add the completed session to memory
                         completed_session = session_services[agent.name].get_session(
@@ -686,7 +765,7 @@ async def submit_analysis(game_id: str, user_input: UserInput):
         game["state"]["conversation_history"].append({
             "round": game["state"]["current_round"],
             "phase": "analysis",
-            "messages": [{"speaker": "user", "message": user_input.input}],
+            "messages": [{"speaker": "User", "message": user_input.input}],
             "analysis": analysis_data
         })
 
