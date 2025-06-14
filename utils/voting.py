@@ -222,8 +222,6 @@ async def process_round_results(votes, remaining_agents, round_number):
     Returns:
         dict: Round result data
     """
-    # print(f"\n📊 ROUND VOTING RESULTS")
-    # print("-" * 50)
     
     # Count votes
     vote_counts = {}
@@ -236,11 +234,6 @@ async def process_round_results(votes, remaining_agents, round_number):
     
     # Display individual votes and count them
     for agent_name, vote_data in votes:
-        # print(f"\n 🗳️ {agent_name}:")
-        # print(f"   Vote: {vote_data['vote']}")
-        # print(f"   Reasoning: {vote_data['reasoning']}")
-        # print(f"   Confidence: {vote_data['confidence']}")
-        # print(f"   Suspicion Level: {vote_data['suspicion_level']}/10")
         
         # Add vote details to the list
         vote_details.append({
@@ -272,8 +265,6 @@ async def process_round_results(votes, remaining_agents, round_number):
     # Wait for all votes to be processed before showing outcome
     await asyncio.sleep(1)  # Small delay to ensure all vote displays are complete
     
-    # print(f"\n📊 VOTING RESULTS")
-    # print("-" * 50)
     
     # Check for majority abstention
     if abstain_count >= majority_threshold:
@@ -312,7 +303,6 @@ async def process_round_results(votes, remaining_agents, round_number):
     elif len(majority_votes) > 1:
         # Multiple agents got majority (shouldn't happen with proper majority calculation)
         tied_agents = [name for name, count in majority_votes]
-        # print(f"🤝 IMPOSSIBLE TIE IN MAJORITY - No elimination (tied: {', '.join(tied_agents)})")
         return {
             "action": "no_elimination",
             "reason": "Tied majority votes",
@@ -330,10 +320,8 @@ async def process_round_results(votes, remaining_agents, round_number):
             tied_candidates = [name for name, count in vote_counts.items() if count == highest_votes]
             
             if len(tied_candidates) == 1:
-                # print(f"❌ NO MAJORITY - {tied_candidates[0]} had most votes ({highest_votes}) but not majority")
                 reason = f"No majority achieved - {tied_candidates[0]} had {highest_votes}/{total_votes} votes"
             else:
-                # print(f"🤝 TIE - No majority, tied at {highest_votes} votes: {', '.join(tied_candidates)}")
                 reason = f"Tie between {', '.join(tied_candidates)} with {highest_votes} votes each"
         else:
             # print("❌ NO VOTES CAST - All abstained or invalid votes")

@@ -15,6 +15,7 @@ from agents.agent_manager import (
 from agents.agent_interaction import voting_session
 from utils.keywords import generate_keywords
 from datetime import datetime
+import pytz
 import json
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -139,6 +140,11 @@ active_games = {}
 
 # Store active streams for each game
 active_streams = {}
+
+# Add this helper function at the top level
+def get_gmt8_timestamp():
+    gmt8 = pytz.timezone('Asia/Singapore')  # Singapore is GMT+8
+    return datetime.now(gmt8).isoformat()
 
 @app.post("/create_game", response_model=GameResponse, 
     summary="Create a new game",
@@ -305,7 +311,7 @@ async def game_update_stream(game_id: str):
         initial_message = {
             "type": "status",
             "data": {"status": "connected"},
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_gmt8_timestamp()
         }
         yield f"data: {json.dumps(initial_message)}\n\n"
         
@@ -313,7 +319,7 @@ async def game_update_stream(game_id: str):
         test_message = {
             "type": "status",
             "data": {"status": "test", "message": "Stream is working"},
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_gmt8_timestamp()
         }
         yield f"data: {json.dumps(test_message)}\n\n"
         
@@ -334,7 +340,7 @@ async def game_update_stream(game_id: str):
                 keep_alive = {
                     "type": "status",
                     "data": {"status": "keep_alive"},
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": get_gmt8_timestamp()
                 }
                 yield f"data: {json.dumps(keep_alive)}\n\n"
                 
@@ -343,7 +349,7 @@ async def game_update_stream(game_id: str):
         error_message = {
             "type": "error",
             "data": {"error": str(e)},
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_gmt8_timestamp()
         }
         yield f"data: {json.dumps(error_message)}\n\n"
     finally:
@@ -474,7 +480,7 @@ async def start_conversationFlow(agents, keywords, game_id=None):
                             "agent": next_speaker.name,
                             "message": "Agent has completed required research using the Tool"
                         },
-                        timestamp=datetime.now().isoformat()
+                        timestamp=get_gmt8_timestamp()
                     ).model_dump())
             else:
                 # Skip this agent if they fail to use the tool
@@ -510,7 +516,7 @@ async def start_conversationFlow(agents, keywords, game_id=None):
                 await active_streams[game_id].put(GameUpdate(
                     type="message",
                     data={"speaker": current_speaker, "message": current_message},
-                    timestamp=datetime.now().isoformat()
+                    timestamp=get_gmt8_timestamp()
                 ).model_dump())
             
             # Add the completed session to memory
@@ -555,7 +561,7 @@ async def play_round(game_id: str):
             await active_streams[game_id].put(GameUpdate(
                 type="status",
                 data={"status": "in_progress", "round": game["state"]["current_round"]},
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
         
         # Phase 1: Communication Phase
@@ -606,7 +612,7 @@ async def play_round(game_id: str):
             await active_streams[game_id].put(GameUpdate(
                 type="status",
                 data={"status": "waiting_for_analysis", "phase": "analysis"},
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
         
         return game["state"]
@@ -616,7 +622,7 @@ async def play_round(game_id: str):
             await active_streams[game_id].put(GameUpdate(
                 type="status",
                 data={"status": "error", "error": str(e)},
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -672,7 +678,7 @@ async def submit_analysis(game_id: str, user_input: UserInput):
                 await active_streams[game_id].put(GameUpdate(
                     type="analysis",
                     data={"status": "skipped", "message": "No analysis requested"},
-                    timestamp=datetime.now().isoformat()
+                    timestamp=get_gmt8_timestamp()
                 ).model_dump())
             
             return {
@@ -737,7 +743,7 @@ async def submit_analysis(game_id: str, user_input: UserInput):
                                     "response": final_response,
                                     "user_input": user_input.input
                                 },
-                                timestamp=datetime.now().isoformat()
+                                timestamp=get_gmt8_timestamp()
                             ).model_dump())
                         
                         # Add the completed session to memory
@@ -778,7 +784,7 @@ async def submit_analysis(game_id: str, user_input: UserInput):
             await active_streams[game_id].put(GameUpdate(
                 type="status",
                 data={"status": "waiting_for_voting", "phase": "voting"},
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
         
         return {
@@ -790,7 +796,7 @@ async def submit_analysis(game_id: str, user_input: UserInput):
             await active_streams[game_id].put(GameUpdate(
                 type="status",
                 data={"status": "error", "error": str(e)},
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
         raise HTTPException(status_code=500, detail=f"Error in analysis phase: {str(e)}")
 
@@ -818,7 +824,7 @@ async def proceed_voting(game_id: str):
             await active_streams[game_id].put(GameUpdate(
                 type="status",
                 data={"status": "voting", "phase": "voting"},
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
         
         # Process voting session
@@ -879,7 +885,7 @@ async def proceed_voting(game_id: str):
                     "eliminated_agent": eliminated_agent if round_result["action"] == "eliminate" else None,
                     "game_status": game["state"]["status"]  # Include game status
                 },
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
             
             # Add a delay before showing vote details
@@ -897,7 +903,7 @@ async def proceed_voting(game_id: str):
                         "suspicion_level": vote_detail["suspicion_level"],
                         "game_status": game["state"]["status"]  # Include game status
                     },
-                    timestamp=datetime.now().isoformat()
+                    timestamp=get_gmt8_timestamp()
                 ).model_dump())
                 # Add a delay between each vote detail
                 await asyncio.sleep(2)
@@ -913,7 +919,7 @@ async def proceed_voting(game_id: str):
                     "abstain_count": round_result.get("abstain_count", 0),
                     "game_status": game["state"]["status"]  # Include game status
                 },
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
             
             # Add a delay before showing game status update
@@ -927,7 +933,7 @@ async def proceed_voting(game_id: str):
                     "phase": game["state"]["current_phase"],
                     "result": game["state"].get("result")
                 },
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
         
         return {
@@ -948,7 +954,7 @@ async def proceed_voting(game_id: str):
             await active_streams[game_id].put(GameUpdate(
                 type="status",
                 data={"status": "error", "error": str(e)},
-                timestamp=datetime.now().isoformat()
+                timestamp=get_gmt8_timestamp()
             ).model_dump())
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -5,7 +5,6 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import FunctionTool
 from google.adk.sessions import InMemorySessionService
 import random
-import json
 from datetime import datetime
 from typing import List, Dict
 import asyncio
@@ -25,22 +24,14 @@ def web_search(query: str) -> dict:
               Note: These results are private to the searching agent and should not be shared.
     """
     try:
-        # Log the search query
-        # print(f"Search Query: {query}")
-        # Check for forbidden search terms
         forbidden_terms = ["werewolf", "imposter", "spy", "traitor", "deception game"]
         if any(term.lower() in query.lower() for term in forbidden_terms):
-            # print(f"Forbidden search term detected in query: {query}")
             return {"status": "error", "error_message": "This search query is not allowed"}
-        # Use the persona_additional_info function which uses Tavily API
         result = persona_additional_info(query)
-        # Log the search result
-        # print(f"Search Result: {json.dumps(result, indent=2)}")
         if result and isinstance(result, dict):
             return {"status": "success", "answer": result}
         return {"status": "error", "error_message": "No search results found"}
     except Exception as e:
-        # print(f"Search error: {str(e)}")
         return {"status": "error", "error_message": str(e)}
 
 def logged_web_search(query: str, agent_name: str) -> dict:
@@ -53,10 +44,8 @@ def logged_web_search(query: str, agent_name: str) -> dict:
     Returns:
         dict: The original web_search result
     """
-    # Get the original result
     result = web_search(query)
     
-    # Create a log entry
     log_entry = {
         "query": query,
         "result": result,

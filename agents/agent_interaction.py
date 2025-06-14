@@ -5,7 +5,6 @@ from utils.voting import conduct_voting_round
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from google.adk.runners import Runner
-import colorful as cf
 
 async def call_conversationFlow(agents, keywords, duration_minutes):
     """
@@ -54,10 +53,6 @@ async def call_conversationFlow(agents, keywords, duration_minutes):
     current_message = f"Hello everyone! Let's discuss these keywords: {', '.join(keywords)}. What are your thoughts?"
     current_speaker = agents[0].name
 
-    # Logging setup - conversation start, allowed keywords.
-    # print(f"\n=== Conversation Started at {datetime.now().strftime('%H:%M:%S')} ===\n")
-    # print(f"Allowed Keywords: {', '.join(keywords)}\n")
-    
     
     while datetime.now() < end_time:
         # Get the next speaker (round-robin)
@@ -103,8 +98,6 @@ async def call_conversationFlow(agents, keywords, duration_minutes):
         
         # Small delay between messages
         await asyncio.sleep(2)
-
-    # print(f"\n=== Conversation Ended at {datetime.now().strftime('%H:%M:%S')} ===\n")
     
     return session_services, memory_services, runners, complete_conversation
 
@@ -126,19 +119,14 @@ async def user_interaction(agents, session_services, memory_services, runners, c
     # Convert conversation to a readable format for agents
     conversation_text = "\n".join([f"{item['speaker']}: {item['message']}" for item in complete_conversation])
     
-    # print("\n=== Analysis Phase Started ===")
-    # print(f"Analysis phase duration: {duration_minutes} minutes")
-    
     # Set end time for analysis phase
     end_time = datetime.now() + timedelta(minutes=duration_minutes)
     
     user_analyses = []
     
     # Process each agent's analysis sequentially
-    # print("\n=== Agents Analyzing ===")
     agent_responses = {}
     for agent in agents:
-        # print(f"\n--- {agent.name} is analyzing... ---")
         final_response = None
         async for agent_name, response in get_agent_analysis(
             agent, 
@@ -147,21 +135,16 @@ async def user_interaction(agents, session_services, memory_services, runners, c
             memory_services[agent.name], 
             conversation_text
         ):
-            # print(f"\n{agent_name}'s Analysis (intermediate):")
-            # print(response)
             final_response = response
             
         if final_response:
             agent_responses[agent_name] = final_response
-            # print(f"\n{agent_name}'s Final Analysis:")
-            # print(final_response)
             
     user_analyses.append({
         "user_input": "Analysis phase",
         "agent_responses": agent_responses,
     })
     
-    # print("\n=== Analysis Phase Completed ===")
     return user_analyses
 
 async def get_agent_analysis(agent, runner, session_service, memory_service, analysis_prompt):
@@ -244,7 +227,6 @@ async def get_agent_analysis(agent, runner, session_service, memory_service, ana
             yield agent.name, final_response
         
     except Exception as e:
-        # print(f"Error in agent analysis for {agent.name}: {str(e)}")
         yield agent.name, f"Error during analysis: {str(e)}"
 
 
@@ -285,50 +267,25 @@ async def display_game_summary(game_history, werewolf, eliminated_agents, remain
     """
     Display a comprehensive game summary.
     """
-    # print(f"\n{'='*70}")
-    # print("📋 GAME SUMMARY")
-    # print(f"{'='*70}")
-    
-    # print(f"\n🎭 ACTUAL IMPOSTER: {werewolf.name}")
-    # print(f"💀 ELIMINATED AGENTS: {[agent.name for agent in eliminated_agents]}")
-    # print(f"👥 SURVIVING AGENTS: {[agent.name for agent in remaining_agents]}")
-    
-    # print(f"\n📊 ROUND-BY-ROUND BREAKDOWN:")
-    # print("-" * 40)
     for i, round_data in enumerate(game_history, 1):
-        # print(f"Round {i}: {round_data['summary']}")
         pass
     
     # Determine final outcome
     if werewolf not in remaining_agents:
-        # print(f"\n🏆 FINAL RESULT: AGENTS WIN!")
-        # print(f"✅ The imposter was successfully identified and eliminated!")
         pass
     else:
-        # print(f"\n😈 FINAL RESULT: IMPOSTER WINS!")
-        # print(f"💀 The imposter survived until the end!")
         pass
-    
-    # print(f"\n📈 GAME STATISTICS:")
-    # print(f"   Total Rounds: {len(game_history)}")
-    # print(f"   Agents Eliminated: {len(eliminated_agents)}")
-    # print(f"   Final Survivors: {len(remaining_agents)}")
-    # print(f"   Imposter Status: {'Survived' if werewolf.name in [agent.name for agent in remaining_agents] else 'Eliminated'}")
 
 async def run_game_round(agents, session_services, memory_services, runners, werewolf, duration_minutes):
     """
     Run a complete game round consisting of user interaction phase followed by voting phase.
     """
-    # print("\n" + "="*50)
-    # print(f"🎮 STARTING NEW ROUND")
-    # print("="*50)
     
     # Initialize empty conversation and analyses for this round
     complete_conversation = []
     user_analyses = []
     
     # Phase 1: User Interaction
-    # print("\n📝 PHASE 1: USER INTERACTION")
     user_analyses = await user_interaction(
         agents, 
         session_services, 
@@ -340,11 +297,9 @@ async def run_game_round(agents, session_services, memory_services, runners, wer
     
     # If no analyses were performed, end the game
     if not user_analyses:
-        # print("\n⚠️ No analyses were performed. Ending game.")
         return False, [], [], []
     
     # Phase 2: Voting
-    # print("\n🗳️ PHASE 2: VOTING")
     round_result = await voting_session(
         agents,
         session_services,
@@ -358,7 +313,6 @@ async def run_game_round(agents, session_services, memory_services, runners, wer
     # Check if werewolf is still in the game
     if round_result["action"] == "eliminate":
         eliminated_agent = round_result["eliminated_agent"]
-        # print("\n🎉 GAME OVER - AGENTS WIN!")
         return False, [], [agent for agent in agents if agent.name != eliminated_agent], [agent for agent in agents if agent.name == eliminated_agent]
     
     return True, [], [agent for agent in agents if agent.name != eliminated_agent], [agent for agent in agents if agent.name == eliminated_agent]
@@ -367,8 +321,6 @@ async def play_game(agents, session_services, memory_services, runners, werewolf
     """
     Main game loop that manages the complete game flow.
     """
-    # print("\n🎮 WEREWOLF GAME STARTED")
-    # print(f"🎭 The imposter is: {werewolf.name} (This is hidden from the agents)")
     
     round_number = 1
     game_continues = True
