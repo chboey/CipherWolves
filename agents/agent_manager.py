@@ -1,16 +1,15 @@
 from utils.personas import randomize_personas, randomize_werewolf
 from utils.sentiment_ruling import persona_additional_info
 from google.adk.agents import LlmAgent
-from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import FunctionTool
-from google.adk.sessions import InMemorySessionService
+from agents.agent_metrics import create_metric_agents
 import random
 from datetime import datetime
 from typing import List, Dict
 import asyncio
 
 
-AGENT_NAME = ['Alice','Bob','Cindy','Dom','Elise']
+AGENT_NAME = ['Alice','Bob','Charlie','Dom','Elise']
 
 def web_search(query: str) -> dict:
     """Search the web using Tavily API for additional context about a topic or persona.
@@ -96,10 +95,6 @@ def get_current_round_searches() -> List[Dict]:
     """
     return getattr(logged_web_search, "current_round_searches", [])
 
-def clear_search_logs():
-    """Clear all web search logs."""
-    logged_web_search.search_logs = []
-
 def clear_current_round_searches():
     """Clear the current round's search logs."""
     logged_web_search.current_round_searches = []
@@ -122,13 +117,14 @@ def initialize_agents(num_agents, model="gemini-2.0-flash-001"):
     """
     Initialize n number of agents with random personas.
     One random agent will be selected as the werewolf.
+    Each agent has a specialized subagent for tracking suspicion and trust.
     
     Args:
         num_agents (int): Number of agents to initialize
         model (str): The model to use for the agents
     
     Returns:
-        list: List of initialized agents
+        tuple: (list of agents, werewolf agent)
     """
     agents = []
     # Randomly select one agent to be the werewolf
@@ -153,12 +149,17 @@ def initialize_agents(num_agents, model="gemini-2.0-flash-001"):
         All interactions, including searches and communications, must align seamlessly with your assumed identity. Ensure that 
         you only use the keywords provided to you.
         Any information obtained through web searches is strictly private to you and should never be directly shared with other agents.
+        You have access to sub-agents that track suspicion and trust levels of other agents. Use their insights to inform your decisions.
+        The system will be the first ever speaker in the conversation, and it is not considered an agent.
         """
         
         # Create web search tool for this agent
         web_search_tool = create_web_search_tool(f"agent_{AGENT_NAME[i]}")
         
-        # Create agent with the persona and web search tool
+        # Create metric sub-agents for each agent
+        metric_agents = create_metric_agents(f"agent_{AGENT_NAME[i]}")
+        
+        # Create main agent with sub-agents
         agent = LlmAgent(
             name=f"agent_{AGENT_NAME[i]}",
             model=model,
@@ -167,6 +168,7 @@ def initialize_agents(num_agents, model="gemini-2.0-flash-001"):
             input_schema=None,
             tools=[web_search_tool],
             output_key="agent_conversation",
+            sub_agents=list(metric_agents.values())  # Add metric sub-agents
         )
         agents.append(agent)
 

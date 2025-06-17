@@ -1,10 +1,8 @@
-import os
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import asyncio
 from agents.agent_manager import (
     initialize_agents, 
@@ -12,7 +10,7 @@ from agents.agent_manager import (
     clear_current_round_searches,
     set_active_streams
 )
-from agents.agent_interaction import voting_session
+from utils.voting import voting_session
 from utils.keywords import generate_keywords
 from datetime import datetime
 import pytz
@@ -39,7 +37,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic models for request/response
+# Store active games
+active_games = {}
+
+# Store active streams for each game
+active_streams = {}
+
 class GameConfig(BaseModel):
     num_agents: int = 5
     model: str = "gemini-2.0-flash-001"
@@ -78,7 +81,6 @@ class VoteDetail(BaseModel):
     vote: str
     reasoning: str
     confidence: str
-    suspicion_level: int
 
 class VotingResult(BaseModel):
     eliminated_agent: Optional[str] = None
@@ -113,7 +115,6 @@ class RoundData(BaseModel):
     searches: List[Dict]
     status: str
 
-# Add new model for streaming updates
 class GameUpdate(BaseModel):
     type: str  # "message", "analysis", "vote", "status"
     data: Dict
@@ -135,15 +136,14 @@ class AgentPersonas(BaseModel):
 class SelectedKeywords(BaseModel):
     keywords: List[str]
 
-# Store active games
-active_games = {}
+class MetricsHistory(BaseModel):
+    """Model for metrics history response"""
+    round: int
+    phase: str
+    metrics: Dict[str, Any]
 
-# Store active streams for each game
-active_streams = {}
-
-# Add this helper function at the top level
 def get_gmt8_timestamp():
-    gmt8 = pytz.timezone('Asia/Singapore')  # Singapore is GMT+8
+    gmt8 = pytz.timezone('Asia/Singapore')
     return datetime.now(gmt8).isoformat()
 
 @app.post("/create_game", response_model=GameResponse, 
@@ -173,7 +173,7 @@ async def create_game(config: GameConfig):
             f"""
             IMPORTANT RULES — FOLLOW STRICTLY:
 
-            1. **You must use the following keywords creatively in your responses**:  
+            1. **You must ONLY use the following keywords creatively in your responses**:  
             {', '.join(keywords)}  
             - You are required to incorporate as many of these keywords as possible into your responses.
             - Use them naturally and intelligently, embedded within your communication.
@@ -206,6 +206,11 @@ async def create_game(config: GameConfig):
             - Use keywords as tools of influence, persuasion, deception, or alliance.
             - Blend keyword use naturally into emotionally or cognitively engaging dialogue.
             - Focus on manipulating trust, suspicion, alignment, and perception.
+
+            7. **Do not reveal any information about your trust or suspicion levels to other agents.**
+            - Do not mention or transfer to any sub-agents.
+            - Do not reveal any trust or suspicion levels.
+            - Do not share any metrics or analysis from your sub-agents.
 
             NON-COMPLIANCE CONSEQUENCES:
             - Any message that breaks persona, reveals hidden role information, or skips the research phase may result in isolation or disqualification from the round.
@@ -240,7 +245,10 @@ async def create_game(config: GameConfig):
             "eliminated_agents": [],
             "werewolf": werewolf.name,
             "game_history": [],
-            "keywords": keywords
+            "keywords": keywords,
+            "trust_levels": {agent.name: 0.5 for agent in agents},  # Initialize trust levels at neutral (0.5)
+            "suspicion_levels": {agent.name: 0.5 for agent in agents},  # Initialize suspicion levels at neutral (0.5)
+            "voting_history": []  # Track voting patterns
         }
         
         # Store game state
@@ -383,8 +391,9 @@ async def start_conversationFlow(agents, keywords, game_id=None):
     memory_services = {}
     runners = {}
     
-    # Initialize services for each agent
+    # Initialize services for each agent and their sub-agents
     for agent in agents:
+        # Initialize services for main agent
         session_services[agent.name] = InMemorySessionService()
         memory_services[agent.name] = InMemoryMemoryService()
         runners[agent.name] = Runner(
@@ -393,17 +402,41 @@ async def start_conversationFlow(agents, keywords, game_id=None):
             session_service=session_services[agent.name],
             memory_service=memory_services[agent.name]
         )
+        
+        # Initialize services for sub-agents if they exist
+        if hasattr(agent, 'sub_agents') and agent.sub_agents:
+            for sub_agent in agent.sub_agents:
+                sub_agent_name = f"{agent.name}_{sub_agent.name}"
+                session_services[sub_agent_name] = InMemorySessionService()
+                memory_services[sub_agent_name] = InMemoryMemoryService()
+                runners[sub_agent_name] = Runner(
+                    agent=sub_agent,
+                    app_name="agent_conversation",
+                    session_service=session_services[sub_agent_name],
+                    memory_service=memory_services[sub_agent_name]
+                )
     
-    # Create initial session for each agent
+    # Create initial session for each agent and sub-agent
     sessions = {}
     for agent in agents:
+        # Create session for main agent
         sessions[agent.name] = session_services[agent.name].create_session(
             app_name="agent_conversation",
             user_id="group_chat",
             session_id=f"session_{agent.name}"
         )
         
-    # Storing complete conversation for tracking.
+        # Create sessions for sub-agents
+        if hasattr(agent, 'sub_agents') and agent.sub_agents:
+            for sub_agent in agent.sub_agents:
+                sub_agent_name = f"{agent.name}_{sub_agent.name}"
+                sessions[sub_agent_name] = session_services[sub_agent_name].create_session(
+                    app_name="agent_conversation",
+                    user_id="group_chat",
+                    session_id=f"session_{sub_agent_name}"
+                )
+    
+    # Storing complete conversation for tracking
     complete_conversation = []
     
     # Track how many times each agent has spoken
@@ -419,21 +452,20 @@ async def start_conversationFlow(agents, keywords, game_id=None):
         if current_round == 1:
             current_message = f"Hello everyone! Let's discuss these keywords: {', '.join(keywords)}. What are your thoughts?"
             current_speaker = "system"
-            complete_conversation.append({"speaker": current_speaker, "message": current_message})
+            complete_conversation.append({
+                "speaker": current_speaker, 
+                "message": current_message,
+                "timestamp": get_gmt8_timestamp()
+            })
         else:
             current_message = "Hello everyone! Let's continue our discussion. What are your thoughts?"
     else:
         current_message = f"Hello everyone! Let's discuss these keywords: {', '.join(keywords)}. What are your thoughts?"
     
-    # Don't increment agent_speaks since this is a system message
-
     # Continue until all agents have spoken their maximum number of times
     while any(speaks < max_speaks for speaks in agent_speaks.values()):
         # Find the next agent who hasn't spoken their maximum times
-        # Get the current minimum speak count
         min_speaks = min(agent_speaks.values())
-        
-        # Find the first agent who has spoken the minimum number of times
         next_speaker = None
         for agent in agents:
             if agent_speaks[agent.name] == min_speaks:
@@ -441,7 +473,7 @@ async def start_conversationFlow(agents, keywords, game_id=None):
                 break
         
         if next_speaker is None:
-            break  # All agents have spoken their maximum times
+            break
             
         # Check if agent has used the tool
         if not agent_tool_usage[next_speaker.name]:
@@ -472,26 +504,34 @@ async def start_conversationFlow(agents, keywords, game_id=None):
             
             if tool_response:
                 agent_tool_usage[next_speaker.name] = True
-                # Broadcast tool usage
-                if game_id and game_id in active_streams:
-                    await active_streams[game_id].put(GameUpdate(
-                        type="tool_usage",
-                        data={
-                            "agent": next_speaker.name,
-                            "message": "Agent has completed required research using the Tool"
-                        },
-                        timestamp=get_gmt8_timestamp()
-                    ).model_dump())
-            else:
-                # Skip this agent if they fail to use the tool
-                continue
         
-        # Create message content without the speaker prefix
+        # Create message content for the next speaker
         message_content = Content(
-            parts=[Part(text=current_message)],
+            parts=[Part(text=f"""
+            IMPORTANT: You are {next_speaker.name} speaking to the group.
+            
+            CRITICAL RULES:
+            1. Stay in character and maintain your persona
+            2. Do not reveal your role
+            3. Do not reveal any trust or suspicion indicators
+            4. Do not output trust_level, suspicion_level, target, or reason
+            5. Do not mention or transfer to any sub-agents
+            6. Do not analyze or evaluate other agents' trustworthiness
+            7. Only speak as your character would speak
+            8. You can discuss and target other agents if relevant
+            9. Be strategic about how you present yourself
+            10. Focus on roleplay and character interaction
+
+            Previous messages in the conversation:
+            {current_message}
+
+            Respond to the conversation above while following ALL the rules above.
+            Your response should be purely in-character dialogue, nothing else.
+            """)],
             role="user"
         )
         
+        # Get response from the next speaker
         final_response = None
         for event in runners[next_speaker.name].run(
             user_id="group_chat",
@@ -500,24 +540,174 @@ async def start_conversationFlow(agents, keywords, game_id=None):
         ):
             if event.is_final_response() and event.content and event.content.parts:
                 final_response = event.content.parts[0].text
+                # Remove any metrics if they somehow got included
+                if "trust_level:" in final_response or "suspicion_level:" in final_response:
+                    final_response = final_response.split("\n\n")[-1]  # Take only the last part after any metrics
                 break
         
         if final_response:
             current_message = final_response
             current_speaker = next_speaker.name
-            agent_speaks[current_speaker] += 1  # Increment speak count
             
-            # Append into conversation logs.
-            message_data = {"speaker": current_speaker, "message": current_message}
-            complete_conversation.append(message_data)
+            # Append into conversation logs
+            complete_conversation.append({
+                "speaker": current_speaker,
+                "message": current_message,
+                "timestamp": datetime.now().isoformat()
+            })
             
-            # Broadcast the message immediately if game_id is provided
-            if game_id and game_id in active_streams:
+            # First, broadcast the agent's message
+            if game_id in active_streams:
                 await active_streams[game_id].put(GameUpdate(
                     type="message",
-                    data={"speaker": current_speaker, "message": current_message},
+                    data={
+                        "speaker": current_speaker,
+                        "message": current_message
+                    },
                     timestamp=get_gmt8_timestamp()
                 ).model_dump())
+            
+            # Then, get and broadcast metric analyses from other agents' sub-agents
+            for other_agent in agents:
+                # Skip if this is the speaking agent or if the agent has no sub-agents
+                if other_agent.name == current_speaker or not hasattr(other_agent, 'sub_agents') or not other_agent.sub_agents:
+                    continue
+                
+                # Get analysis from each sub-agent of the other agent
+                for sub_agent in other_agent.sub_agents:
+                    try:
+                        sub_agent_name = f"{other_agent.name}_{sub_agent.name}"
+                        
+                        # Create context-aware analysis content
+                        analysis_content = Content(
+                            parts=[Part(text=f"""
+                            You are {sub_agent.name}, a metric tracker helping {other_agent.name} evaluate other agents.
+                            Your role is to analyze both trustworthiness and suspicious behavior of other agents.
+                            
+                            Complete conversation history:
+                            {json.dumps(complete_conversation, indent=2)}
+                            
+                            Latest message from {current_speaker}:
+                            {current_message}
+                            
+                            Analyze this input in the context of the entire conversation and help {other_agent.name} understand the trustworthiness and suspicious behavior.
+                            
+                            Provide your analysis in this EXACT format:
+                            trust_level: <float between 0 and 1>
+                            suspicion_level: <float between 0 and 1>
+                            target: {current_speaker}
+                            reason: <detailed explanation of your analysis>
+                            
+                            Remember:
+                            1. Consider the full conversation context
+                            2. Look for patterns and changes in behavior
+                            3. Consider relationships between messages
+                            4. Provide concrete evidence and specific examples
+                            5. Consider both trust and suspicion aspects
+                            6. Be objective and analytical
+                            7. Focus on observable behaviors
+                            8. Explain your reasoning clearly
+                            """)],
+                            role="user"
+                        )
+                        
+                        # Get analysis from sub-agent
+                        analysis_response = None
+                        for event in runners[sub_agent_name].run(
+                            user_id="group_chat",
+                            session_id=f"session_{sub_agent_name}",
+                            new_message=analysis_content
+                        ):
+                            if event.is_final_response() and event.content and event.content.parts:
+                                analysis_response = event.content.parts[0].text
+                                # Parse and broadcast metrics
+                                metrics = {}
+                                for line in analysis_response.split('\n'):
+                                    if ':' in line:
+                                        key, value = line.split(':', 1)
+                                        metrics[key.strip()] = value.strip()
+                                
+                                # Create metrics data
+                                metrics_data = {
+                                    "analyzer": sub_agent.name,
+                                    "parent_agent": other_agent.name,
+                                    "trust_level": float(metrics.get('trust_level', 0)),
+                                    "suspicion_level": float(metrics.get('suspicion_level', 0)),
+                                    "target": metrics.get('target', current_speaker),
+                                    "reason": metrics.get('reason', 'No reason provided')
+                                }
+                                
+                                # Broadcast metrics
+                                if game_id in active_streams:
+                                    await active_streams[game_id].put(GameUpdate(
+                                        type="metrics",
+                                        data=metrics_data,
+                                        timestamp=get_gmt8_timestamp()
+                                    ).model_dump())
+                                
+                                # Store metrics in conversation history
+                                if game_id in active_games:
+                                    current_round = active_games[game_id]["state"]["current_round"]
+                                    if "metrics" not in active_games[game_id]["state"]:
+                                        active_games[game_id]["state"]["metrics"] = []
+                                    
+                                    # Add metrics to the current round's data
+                                    active_games[game_id]["state"]["metrics"].append({
+                                        "round": current_round,
+                                        "phase": "communication",
+                                        "metrics": metrics_data
+                                    })
+                                
+                                break
+                        
+                        # Add the completed session to memory
+                        completed_session = session_services[sub_agent_name].get_session(
+                            app_name="agent_conversation",
+                            user_id="group_chat",
+                            session_id=f"session_{sub_agent_name}"
+                        )
+                        await memory_services[sub_agent_name].add_session_to_memory(completed_session)
+                        
+                        # Store conversation history in sub-agent's memory using the correct method
+                        try:
+                            # Create a memory entry for the conversation history
+                            memory_entry = {
+                                "type": "conversation_history",
+                                "content": complete_conversation,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                            # Store in memory using add_session_to_memory
+                            await memory_services[sub_agent_name].add_session_to_memory(
+                                session_services[sub_agent_name].create_session(
+                                    app_name="agent_conversation",
+                                    user_id="group_chat",
+                                    session_id=f"memory_{sub_agent_name}_{datetime.now().timestamp()}"
+                                )
+                            )
+                        except Exception as e:
+                            # Only log the error, don't try to store memory again
+                            if game_id in active_streams:
+                                await active_streams[game_id].put(GameUpdate(
+                                    type="memory_error",
+                                    data={
+                                        "analyzer": sub_agent.name,
+                                        "parent_agent": other_agent.name,
+                                        "error": f"Error storing conversation history: {str(e)}"
+                                    },
+                                    timestamp=get_gmt8_timestamp()
+                                ).model_dump())
+                        
+                    except Exception as e:
+                        if game_id in active_streams:
+                            await active_streams[game_id].put(GameUpdate(
+                                type="metrics_error",
+                                data={
+                                    "analyzer": sub_agent.name,
+                                    "parent_agent": other_agent.name,
+                                    "error": f"Error in sub-agent analysis: {str(e)}"
+                                },
+                                timestamp=get_gmt8_timestamp()
+                            ).model_dump())
             
             # Add the completed session to memory
             completed_session = session_services[next_speaker.name].get_session(
@@ -526,10 +716,12 @@ async def start_conversationFlow(agents, keywords, game_id=None):
                 session_id=f"session_{next_speaker.name}"
             )
             await memory_services[next_speaker.name].add_session_to_memory(completed_session)
+            
+            # Increment speak count
+            agent_speaks[next_speaker.name] += 1
         else:
             current_message = "I don't have a response at this moment."
             current_speaker = next_speaker.name
-            agent_speaks[current_speaker] += 1  # Count failed response as a speak
         
         # Small delay between messages
         await asyncio.sleep(2)
@@ -589,7 +781,8 @@ async def play_round(game_id: str):
             "round": game["state"]["current_round"],
             "phase": "communication",
             "messages": complete_conversation,  # Add initial messages to the conversation
-            "searches": round_searches
+            "searches": round_searches,
+            "timestamp": get_gmt8_timestamp()
         }
         
         # Add to conversation history
@@ -640,7 +833,8 @@ async def delete_game(game_id: str):
 @app.post("/games/{game_id}/analysis", response_model=AnalysisResponse, tags=["Game Phases - Response will be broadcasted"])
 async def submit_analysis(game_id: str, user_input: UserInput):
     """
-    Submit user input for agents to analyze during the analysis phase.
+    Submit user analysis and trigger all agents' sub-agents to analyze the input.
+    This will update trust and suspicion metrics for all agents.
     """
     if game_id not in active_games:
         raise HTTPException(status_code=404, detail="Game not found")
@@ -649,132 +843,9 @@ async def submit_analysis(game_id: str, user_input: UserInput):
     if game["state"]["status"] != "waiting_for_analysis":
         raise HTTPException(status_code=400, detail="Game is not in analysis phase")
     
-    try:
-        # Check for empty input or specific phrases indicating no response
-        no_response_phrases = ["none", "no response", "nothing", "skip", "pass"]
-        user_input_lower = user_input.input.lower().strip() if user_input.input else ""
-        
-        if (not user_input.input or 
-            not user_input.input.strip() or 
-            user_input_lower in no_response_phrases):
-            
-            # Store empty analysis in conversation history
-            if "conversation_history" not in game["state"]:
-                game["state"]["conversation_history"] = []
-            
-            game["state"]["conversation_history"].append({
-                "round": game["state"]["current_round"],
-                "phase": "analysis",
-                "messages": [{"speaker": "User", "message": user_input.input or ""}],
-                "analysis": {"user_input": user_input.input or "", "agent_responses": {}}
-            })
-            
-            # Update game state to waiting for voting
-            game["state"]["status"] = "waiting_for_voting"
-            game["state"]["current_phase"] = "voting"
-            
-            # Broadcast analysis skip
-            if game_id in active_streams:
-                await active_streams[game_id].put(GameUpdate(
-                    type="analysis",
-                    data={"status": "skipped", "message": "No analysis requested"},
-                    timestamp=get_gmt8_timestamp()
-                ).model_dump())
-            
-            return {
-                "agent_responses": {},
-                "message": "No analysis requested. Skipping analysis phase. Call /games/{game_id}/vote to proceed with voting."
-            }
-        
-        # Get the current conversation from game state
-        conversation = game["state"].get("current_conversation", [])
-        conversation_text = "\n".join([f"{item['speaker']}: {item['message']}" for item in conversation])
-        
-        # Get the analysis data from game state
-        analysis_data = game.get("analysis_data", {})
-        session_services = analysis_data.get("session_services", {})
-        memory_services = analysis_data.get("memory_services", {})
-        runners = analysis_data.get("runners", {})
-        
-        # Create message content for the user input
-        message_content = Content(
-            parts=[Part(text=f"""
-        IMPORTANT: This is a question from the HUMAN USER, not from another agent.
-
-        USER'S QUESTION: {user_input.input}
-
-        Previous Conversation:
-        {conversation_text}
-
-        Please analyze the conversation and respond to the user's question above. Remember to:
-        1. Use the required keywords naturally in your response
-        2. Stay in character and maintain your persona
-        3. Do not reveal your role
-        4. Consider how your response might affect others' perception of you
-        """)],
-                    role="user"
-                )
-        
-        # Get responses from each agent
-        agent_responses = {}
-        for agent in game["agents"]:
-            if agent.name in runners:
-                try:
-                    # Get response from the agent
-                    final_response = None
-                    for event in runners[agent.name].run(
-                        user_id="group_chat",
-                        session_id=f"session_{agent.name}",
-                        new_message=message_content
-                    ):
-                        if event.is_final_response() and event.content and event.content.parts:
-                            final_response = event.content.parts[0].text
-                            break
-                    
-                    if final_response:
-                        agent_responses[agent.name] = final_response
-                        
-                        # Broadcast each agent's analysis response immediately
-                        if game_id in active_streams:
-                            await active_streams[game_id].put(GameUpdate(
-                                type="analysis_response",
-                                data={
-                                    "agent": agent.name,
-                                    "response": final_response,
-                                    "user_input": user_input.input
-                                },
-                                timestamp=get_gmt8_timestamp()
-                            ).model_dump())
-                        
-                        # Add the completed session to memory
-                        completed_session = session_services[agent.name].get_session(
-                            app_name="agent_conversation",
-                            user_id="group_chat",
-                            session_id=f"session_{agent.name}"
-                        )
-                        await memory_services[agent.name].add_session_to_memory(completed_session)
-                except Exception as e:
-                    print(f"Error getting response from agent {agent.name}: {str(e)}")
-                    agent_responses[agent.name] = "I apologize, but I'm having trouble responding at the moment."
-        
-        # Store the responses in game state
-        if "analyses" not in game["state"]:
-            game["state"]["analyses"] = []
-        
-        analysis_data = {
-            "user_input": user_input.input,
-            "agent_responses": agent_responses
-        }
-        game["state"]["analyses"].append(analysis_data)
-        
-        # Store responses in conversation history
-        game["state"]["conversation_history"].append({
-            "round": game["state"]["current_round"],
-            "phase": "analysis",
-            "messages": [{"speaker": "User", "message": user_input.input}],
-            "analysis": analysis_data
-        })
-
+    # Check if user wants to skip analysis
+    skip_keywords = ["none", "nothing", "skip", "pass", "no analysis", "no input"]
+    if any(keyword in user_input.input.lower() for keyword in skip_keywords):
         # Update game state to waiting for voting
         game["state"]["status"] = "waiting_for_voting"
         game["state"]["current_phase"] = "voting"
@@ -787,18 +858,284 @@ async def submit_analysis(game_id: str, user_input: UserInput):
                 timestamp=get_gmt8_timestamp()
             ).model_dump())
         
-        return {
-            "agent_responses": agent_responses,
-            "message": "Analysis completed. Call /games/{game_id}/vote to proceed with voting."
-        }
-    except Exception as e:
-        if game_id in active_streams:
-            await active_streams[game_id].put(GameUpdate(
-                type="status",
-                data={"status": "error", "error": str(e)},
-                timestamp=get_gmt8_timestamp()
-            ).model_dump())
-        raise HTTPException(status_code=500, detail=f"Error in analysis phase: {str(e)}")
+        return AnalysisResponse(
+            agent_responses={},
+            message="Analysis skipped. Call /games/{game_id}/vote to proceed with voting."
+        )
+    
+    agents = game["agents"]
+    agent_responses = {}
+    game["state"]["current_phase"] ="analysis"
+    
+    # Initialize services for each agent if not already done
+    if "session_services" not in game:
+        game["session_services"] = {}
+        game["memory_services"] = {}
+        game["runners"] = {}
+        
+        for agent in agents:
+            # Initialize services for main agent
+            game["session_services"][agent.name] = InMemorySessionService()
+            game["memory_services"][agent.name] = InMemoryMemoryService()
+            game["runners"][agent.name] = Runner(
+                agent=agent,
+                app_name="agent_conversation",
+                session_service=game["session_services"][agent.name],
+                memory_service=game["memory_services"][agent.name]
+            )
+            
+            # Initialize services for sub-agents
+            if hasattr(agent, 'sub_agents') and agent.sub_agents:
+                for sub_agent in agent.sub_agents:
+                    sub_agent_name = f"{agent.name}_{sub_agent.name}"
+                    game["session_services"][sub_agent_name] = InMemorySessionService()
+                    game["memory_services"][sub_agent_name] = InMemoryMemoryService()
+                    game["runners"][sub_agent_name] = Runner(
+                        agent=sub_agent,
+                        app_name="agent_conversation",
+                        session_service=game["session_services"][sub_agent_name],
+                        memory_service=game["memory_services"][sub_agent_name]
+                    )
+    
+    # Get responses from parent agents
+    for agent in agents:
+        try:
+            # Create message content for parent agent
+            parent_message = Content(
+                parts=[Part(text=f"""
+                IMPORTANT: This is a question from the HUMAN USER, not from another agent.
+                You are {agent.name} speaking to the group.
+                
+                CRITICAL RULES:
+                1. Stay in character and maintain your persona
+                2. Do not reveal your role
+                3. Do not reveal any trust or suspicion indicators
+                4. Do not output trust_level, suspicion_level, target, or reason
+                5. Do not mention or transfer to any sub-agents
+                6. Do not analyze or evaluate other agents' trustworthiness
+                7. Only speak as your character would speak
+                8. You can discuss and target other agents if relevant
+                9. Be strategic about how you present yourself
+                10. Focus on roleplay and character interaction
+                11. If the user refers to an entity in a way that clearly indicates they mean an agent (e.g., "What does the Alice think?"), treat it as a direct reference to the agent and respond accordingly.
+
+                USER'S QUESTION: {user_input.input}
+
+                Respond to the user's question above while following ALL the rules above.
+                Your response should be purely in-character dialogue, nothing else.
+                """)],
+                role="user"
+            )
+            
+            # Get response from parent agent
+            parent_response = None
+            for event in game["runners"][agent.name].run(
+                user_id="group_chat",
+                session_id=f"session_{agent.name}",
+                new_message=parent_message
+            ):
+                if event.is_final_response() and event.content and event.content.parts:
+                    parent_response = event.content.parts[0].text
+                    # Remove any metrics if they somehow got included
+                    if "trust_level:" in parent_response or "suspicion_level:" in parent_response:
+                        parent_response = parent_response.split("\n\n")[-1]  # Take only the last part after any metrics
+                    break
+            
+            if parent_response:
+                agent_responses[agent.name] = parent_response
+                
+                # Broadcast parent agent's response
+                if game_id in active_streams:
+                    await active_streams[game_id].put(GameUpdate(
+                        type="analysis_response",
+                        data={
+                            "agent": agent.name,
+                            "response": parent_response,
+                            "user_input": user_input.input
+                        },
+                        timestamp=get_gmt8_timestamp()
+                    ).model_dump())
+            
+            # Add the completed session to memory
+            completed_session = game["session_services"][agent.name].get_session(
+                app_name="agent_conversation",
+                user_id="group_chat",
+                session_id=f"session_{agent.name}"
+            )
+            await game["memory_services"][agent.name].add_session_to_memory(completed_session)
+            
+        except Exception as e:
+            if game_id in active_streams:
+                await active_streams[game_id].put(GameUpdate(
+                    type="analysis_error",
+                    data={
+                        "agent": agent.name,
+                        "error": f"Error in agent response: {str(e)}"
+                    },
+                    timestamp=get_gmt8_timestamp()
+                ).model_dump())
+    
+    # Get analysis from sub-agents
+    for agent in agents:
+        if not hasattr(agent, 'sub_agents') or not agent.sub_agents:
+            continue
+            
+        for sub_agent in agent.sub_agents:
+            try:
+                sub_agent_name = f"{agent.name}_{sub_agent.name}"
+                # Get sub-agent analysis
+                analysis_content = Content(
+                    parts=[Part(text=f"""
+                    You are {sub_agent.name}, a metric tracker assisting {agent.name} in evaluating the trustworthiness and suspicious behavior of agents, including the user.
+                    
+                    Complete conversation history:
+                    {json.dumps(game["state"]["conversation_history"], indent=2)}
+                    
+                    User's latest input:
+                    {user_input.input}
+                    
+                    Analyze this input in the context of the entire conversation. You have a choice:
+                    1. Agree with the user's suspicion and target another agent.
+                    2. Target the user if you find their behavior suspicious.
+                    
+                    Provide your analysis in this EXACT format:
+                    trust_level: <float between 0 and 1>
+                    suspicion_level: <float between 0 and 1>
+                    target: <name of the agent you're analyzing or 'user' if analyzing user input>
+                    reason: <detailed explanation of your analysis>
+                    
+                    Remember:
+                    1. Consider the full conversation context
+                    2. Look for patterns and changes in behavior
+                    3. Consider relationships between messages
+                    4. Provide concrete evidence and specific examples
+                    5. Consider both trust and suspicion aspects
+                    6. Be objective and analytical
+                    7. Focus on observable behaviors
+                    8. Explain your reasoning clearly
+                    9. Trust and suspicion levels MUST be between 0 and 1
+                    """)],
+                    role="user"
+                )
+                
+                # Get analysis from sub-agent
+                analysis_response = None
+                for event in game["runners"][sub_agent_name].run(
+                    user_id="group_chat",
+                    session_id=f"session_{sub_agent_name}",
+                    new_message=analysis_content
+                ):
+                    if event.is_final_response() and event.content and event.content.parts:
+                        analysis_response = event.content.parts[0].text
+                        break
+                
+                if analysis_response:
+                    # Parse metrics from the response
+                    metrics = {}
+                    for line in analysis_response.split('\n'):
+                        if ':' in line:
+                            key, value = line.split(':', 1)
+                            metrics[key.strip()] = value.strip()
+                    
+                    target = metrics.get('target', 'user')  # Default to 'user' instead of 'unknown'
+                    
+                    try:
+                        trust_level = float(metrics.get('trust_level', 0))
+                        suspicion_level = float(metrics.get('suspicion_level', 0))
+                        
+                        # Ensure values are within bounds
+                        trust_level = max(0, min(1, trust_level))
+                        suspicion_level = max(0, min(1, suspicion_level))
+                        
+                        # Initialize if not exists
+                        if target not in game["state"]["trust_levels"]:
+                            game["state"]["trust_levels"][target] = 0
+                        if target not in game["state"]["suspicion_levels"]:
+                            game["state"]["suspicion_levels"][target] = 0
+                        
+                        # Update values
+                        game["state"]["trust_levels"][target] = trust_level
+                        game["state"]["suspicion_levels"][target] = suspicion_level
+                        
+                        # Extract just the reason from the analysis
+                        reason = metrics.get('reason', 'No reason provided')
+                        
+                        # Create metrics data
+                        metrics_data = {
+                            "analyzer": sub_agent.name,
+                            "trust_level": trust_level,
+                            "suspicion_level": suspicion_level,
+                            "target": target,
+                            "reason": reason
+                        }
+                        
+                        # Broadcast the analysis
+                        if game_id in active_streams:
+                            await active_streams[game_id].put(GameUpdate(
+                                type="analysis_response",
+                                data=metrics_data,
+                                timestamp=get_gmt8_timestamp()
+                            ).model_dump())
+                        
+                        # Store metrics in conversation history
+                        if "metrics" not in game["state"]:
+                            game["state"]["metrics"] = []
+                        
+                        # Add metrics to the current round's data
+                        game["state"]["metrics"].append({
+                            "round": game["state"]["current_round"],
+                            "phase": "analysis",
+                            "metrics": metrics_data
+                        })
+                    except ValueError:
+                        pass  # Skip invalid numeric values
+            
+            except Exception as e:
+                if game_id in active_streams:
+                    await active_streams[game_id].put(GameUpdate(
+                        type="metrics_error",
+                        data={
+                            "analyzer": sub_agent.name,
+                            "error": f"Error in analysis: {str(e)}"
+                        },
+                        timestamp=get_gmt8_timestamp()
+                    ).model_dump())
+    
+    # Store the responses in game state
+    if "analyses" not in game["state"]:
+        game["state"]["analyses"] = []
+    
+    analysis_data = {
+        "user_input": user_input.input,
+        "agent_responses": agent_responses
+    }
+    game["state"]["analyses"].append(analysis_data)
+    
+    # Store responses in conversation history
+    game["state"]["conversation_history"].append({
+        "round": game["state"]["current_round"],
+        "phase": "analysis",
+        "messages": [{"speaker": "User", "message": user_input.input, "timestamp": get_gmt8_timestamp()}],
+        "analysis": analysis_data,
+        "timestamp": get_gmt8_timestamp()
+    })
+    
+    # Update game state to waiting for voting
+    game["state"]["status"] = "waiting_for_voting"
+    game["state"]["current_phase"] = "voting"
+    
+    # Broadcast analysis phase complete
+    if game_id in active_streams:
+        await active_streams[game_id].put(GameUpdate(
+            type="status",
+            data={"status": "waiting_for_voting", "phase": "voting"},
+            timestamp=get_gmt8_timestamp()
+        ).model_dump())
+    
+    return AnalysisResponse(
+        agent_responses=agent_responses,
+        message="Analysis completed. Call /games/{game_id}/vote to proceed with voting."
+    )
 
 @app.post("/games/{game_id}/vote", response_model=VotingResult, tags=["Game Phases - Response will be broadcasted"])
 async def proceed_voting(game_id: str):
@@ -813,6 +1150,8 @@ async def proceed_voting(game_id: str):
         raise HTTPException(status_code=400, detail="Game is not in voting phase")
     
     try:
+        game["state"]["current_phase"] = "voting"
+        
         # Get the latest analysis if it exists, otherwise use empty analysis
         latest_analysis = game["state"].get("analyses", [{}])[-1] if game["state"].get("analyses") else {
             "user_input": "",
@@ -840,13 +1179,13 @@ async def proceed_voting(game_id: str):
         
         # Update game state based on voting result
         if round_result["action"] == "eliminate":
-            eliminated_agent = round_result["eliminated_agent"].name
-            game["agents"] = [agent for agent in game["agents"] if agent.name != eliminated_agent]
-            game["state"]["eliminated_agents"].append(eliminated_agent)
+            eliminated_agent = round_result["eliminated_agent"]
+            game["agents"] = [agent for agent in game["agents"] if agent.name != eliminated_agent.name]
+            game["state"]["eliminated_agents"].append(eliminated_agent.name)
             game["state"]["remaining_agents"] = [agent.name for agent in game["agents"]]
             
             # Check if werewolf was eliminated
-            if eliminated_agent == game["werewolf"].name:
+            if eliminated_agent.name == game["werewolf"].name:
                 game["state"]["status"] = "completed"
                 game["state"]["result"] = "agents_win"
             elif len(game["agents"]) <= 2:
@@ -863,27 +1202,27 @@ async def proceed_voting(game_id: str):
                 game["state"]["status"] = "in_progress"
                 game["state"]["current_phase"] = "communication"
         
-        # Add voting result to game history
-        game["state"]["game_history"].append({
-            "round": game["state"]["current_round"],
-            "phase": "voting",
-            "eliminated_agent": eliminated_agent if round_result["action"] == "eliminate" else None,
-            "result": round_result["action"],
-            "reason": round_result.get("reason", round_result.get("summary", "No reason provided")),
-            "vote_details": round_result.get("vote_details", []),
-            "vote_counts": round_result.get("vote_counts", {}),
-            "abstain_count": round_result.get("abstain_count", 0)
-        })
+        # Store voting history
+        for vote_detail in round_result.get("vote_details", []):
+            game["state"]["voting_history"].append({
+                "round": game["state"]["current_round"],
+                "voter": vote_detail["agent"],
+                "voted_for": vote_detail["vote"],
+                "confidence": vote_detail["confidence"],
+                "eliminated_agent": eliminated_agent.name if round_result["action"] == "eliminate" else None,
+                "was_werewolf": eliminated_agent.name == game["werewolf"].name if round_result["action"] == "eliminate" else False,
+                "timestamp": get_gmt8_timestamp()
+            })
         
-        # Broadcast voting results
+        # Broadcast voting results first
         if game_id in active_streams:
             # First broadcast the action and eliminated agent
             await active_streams[game_id].put(GameUpdate(
                 type="vote",
                 data={
                     "action": round_result["action"],
-                    "eliminated_agent": eliminated_agent if round_result["action"] == "eliminate" else None,
-                    "game_status": game["state"]["status"]  # Include game status
+                    "eliminated_agent": eliminated_agent.name if round_result["action"] == "eliminate" else None,
+                    "game_status": game["state"]["status"]
                 },
                 timestamp=get_gmt8_timestamp()
             ).model_dump())
@@ -900,8 +1239,7 @@ async def proceed_voting(game_id: str):
                         "vote": vote_detail["vote"],
                         "reasoning": vote_detail["reasoning"],
                         "confidence": vote_detail["confidence"],
-                        "suspicion_level": vote_detail["suspicion_level"],
-                        "game_status": game["state"]["status"]  # Include game status
+                        "game_status": game["state"]["status"]
                     },
                     timestamp=get_gmt8_timestamp()
                 ).model_dump())
@@ -917,10 +1255,157 @@ async def proceed_voting(game_id: str):
                 data={
                     "vote_counts": round_result.get("vote_counts", {}),
                     "abstain_count": round_result.get("abstain_count", 0),
-                    "game_status": game["state"]["status"]  # Include game status
+                    "game_status": game["state"]["status"]
                 },
                 timestamp=get_gmt8_timestamp()
             ).model_dump())
+            
+            # Add a delay before starting analysis
+            await asyncio.sleep(2)
+            
+            # Only analyze if game hasn't ended
+            if game["state"]["status"] != "completed":
+                # Prepare voting results for analysis
+                voting_results = {
+                    "eliminated_agent": eliminated_agent.name if round_result["action"] == "eliminate" else None,
+                    "was_werewolf": eliminated_agent.name == game["werewolf"].name if round_result["action"] == "eliminate" else False,
+                    "vote_details": round_result.get("vote_details", []),
+                    "vote_counts": round_result.get("vote_counts", {}),
+                    "abstain_count": round_result.get("abstain_count", 0),
+                    "trust_levels": game["state"]["trust_levels"],
+                    "suspicion_levels": game["state"]["suspicion_levels"],
+                    "voting_history": game["state"]["voting_history"]
+                }
+                
+                # Get analysis from sub-agents
+                for agent in game["agents"]:
+                    if not hasattr(agent, 'sub_agents') or not agent.sub_agents:
+                        continue
+                        
+                    for sub_agent in agent.sub_agents:
+                        try:
+                            sub_agent_name = f"{agent.name}_{sub_agent.name}"
+                            # Get sub-agent analysis
+                            analysis_content = Content(
+                                parts=[Part(text=f"""
+                                You are {sub_agent.name}, a metric tracker helping {agent.name} evaluate other agents.
+                                Your role is to analyze both trustworthiness and suspicious behavior of other agents.
+                                
+                                VOTING RESULTS:
+                                {json.dumps(voting_results, indent=2)}
+                                
+                                Analyze the voting results and help {agent.name}
+                                
+                                Provide your analysis in this EXACT format:
+                                trust_level: <float between 0 and 1>
+                                suspicion_level: <float between 0 and 1>
+                                target: <name of the agent you're analyzing>
+                                reason: <detailed explanation of your analysis>
+                                
+                                Remember:
+                                1. Consider the full conversation context
+                                2. Look for patterns and changes in behavior
+                                3. Consider relationships between messages
+                                4. Provide concrete evidence and specific examples
+                                5. Consider both trust and suspicion aspects
+                                6. Be objective and analytical
+                                7. Focus on observable behaviors
+                                8. Explain your reasoning clearly
+                                9. Trust and suspicion levels MUST be between 0 and 1
+                                """)],
+                                role="user"
+                            )
+                            
+                            # Get analysis from sub-agent
+                            analysis_response = None
+                            for event in game["analysis_data"]["runners"][sub_agent_name].run(
+                                user_id="group_chat",
+                                session_id=f"session_{sub_agent_name}",
+                                new_message=analysis_content
+                            ):
+                                if event.is_final_response() and event.content and event.content.parts:
+                                    analysis_response = event.content.parts[0].text
+                                    break
+                            
+                            if analysis_response:
+                                # Parse metrics from the response
+                                metrics = {}
+                                for line in analysis_response.split('\n'):
+                                    if ':' in line:
+                                        key, value = line.split(':', 1)
+                                        metrics[key.strip()] = value.strip()
+                                
+                                target = metrics.get('target', 'user')  # Default to 'user' instead of 'unknown'
+                                
+                                try:
+                                    trust_level = float(metrics.get('trust_level', 0))
+                                    suspicion_level = float(metrics.get('suspicion_level', 0))
+                                    
+                                    # Ensure values are within bounds
+                                    trust_level = max(0, min(1, trust_level))
+                                    suspicion_level = max(0, min(1, suspicion_level))
+                                    
+                                    # Initialize if not exists
+                                    if target not in game["state"]["trust_levels"]:
+                                        game["state"]["trust_levels"][target] = 0
+                                    if target not in game["state"]["suspicion_levels"]:
+                                        game["state"]["suspicion_levels"][target] = 0
+                                    
+                                    # Update values
+                                    game["state"]["trust_levels"][target] = trust_level
+                                    game["state"]["suspicion_levels"][target] = suspicion_level
+                                    
+                                    # Extract just the reason from the analysis
+                                    reason = metrics.get('reason', 'No reason provided')
+                                    
+                                    # Create metrics data
+                                    metrics_data = {
+                                        "analyzer": sub_agent.name,
+                                        "trust_level": trust_level,
+                                        "suspicion_level": suspicion_level,
+                                        "target": target,
+                                        "reason": reason
+                                    }
+                                    
+                                    # Broadcast the analysis
+                                    if game_id in active_streams:
+                                        await active_streams[game_id].put(GameUpdate(
+                                            type="analysis_response",
+                                            data=metrics_data,
+                                            timestamp=get_gmt8_timestamp()
+                                        ).model_dump())
+                                    
+                                    # Store metrics in conversation history
+                                    if "metrics" not in game["state"]:
+                                        game["state"]["metrics"] = []
+                                    
+                                    # Add metrics to the current round's data
+                                    game["state"]["metrics"].append({
+                                        "round": game["state"]["current_round"],
+                                        "phase": "voting",
+                                        "metrics": metrics_data
+                                    })
+                                except ValueError:
+                                    pass  # Skip invalid numeric values
+                            
+                            # Add the completed session to memory
+                            completed_session = game["analysis_data"]["session_services"][sub_agent_name].get_session(
+                                app_name="agent_conversation",
+                                user_id="group_chat",
+                                session_id=f"session_{sub_agent_name}"
+                            )
+                            await game["analysis_data"]["memory_services"][sub_agent_name].add_session_to_memory(completed_session)
+                            
+                        except Exception as e:
+                            if game_id in active_streams:
+                                await active_streams[game_id].put(GameUpdate(
+                                    type="metrics_error",
+                                    data={
+                                        "analyzer": sub_agent.name,
+                                        "error": f"Error in voting analysis: {str(e)}"
+                                    },
+                                    timestamp=get_gmt8_timestamp()
+                                ).model_dump())
             
             # Add a delay before showing game status update
             await asyncio.sleep(2)
@@ -936,8 +1421,22 @@ async def proceed_voting(game_id: str):
                 timestamp=get_gmt8_timestamp()
             ).model_dump())
         
+        # Add voting result to game history
+        game["state"]["game_history"].append({
+            "round": game["state"]["current_round"],
+            "phase": "voting",
+            "eliminated_agent": eliminated_agent.name if round_result["action"] == "eliminate" else None,
+            "result": round_result["action"],
+            "reason": round_result.get("reason", round_result.get("summary", "No reason provided")),
+            "vote_details": round_result.get("vote_details", []),
+            "vote_counts": round_result.get("vote_counts", {}),
+            "abstain_count": round_result.get("abstain_count", 0),
+            "trust_levels": game["state"]["trust_levels"],
+            "suspicion_levels": game["state"]["suspicion_levels"]
+        })
+        
         return {
-            "eliminated_agent": eliminated_agent if round_result["action"] == "eliminate" else None,
+            "eliminated_agent": eliminated_agent.name if round_result["action"] == "eliminate" else None,
             "round": game["state"]["current_round"],
             "result": round_result["action"],
             "reason": round_result.get("reason", round_result.get("summary", "No reason provided")),
@@ -946,7 +1445,9 @@ async def proceed_voting(game_id: str):
             "vote_details": round_result.get("vote_details", []),
             "vote_counts": round_result.get("vote_counts", {}),
             "abstain_count": round_result.get("abstain_count", 0),
-            "game_status": game["state"]["status"]  # Include game status in response
+            "game_status": game["state"]["status"],
+            "trust_levels": game["state"]["trust_levels"],
+            "suspicion_levels": game["state"]["suspicion_levels"]
         }
     except Exception as e:
         game["state"]["status"] = "error"
@@ -1040,46 +1541,16 @@ async def get_conversation_history(game_id: str):
                     "type": "analysis_response"
                 })
         
-
-            voting_details = next(
-                (vote for vote in game["state"].get("game_history", []) 
-                 if vote.get("round") == round_data["round"] and vote.get("phase") == "voting"),
-                None
-            )
-            
-            if voting_details:
-                # Add voting results
-                history_entry["messages"].append({
-                    "speaker": "System",
-                    "message": f"Voting Results for Round {voting_details['round']}: Eliminated Agent: {voting_details.get('eliminated_agent', 'None')}, Result: {voting_details.get('result', 'No result')}",
-                    "type": "voting_result"
-                })
-                
-                # Add vote details
-                for vote in voting_details.get("vote_details", []):
-                    history_entry["messages"].append({
-                        "speaker": vote["agent"],
-                        "message": f"Voted for {vote['vote']} with confidence {vote['confidence']}",
-                        "type": "vote"
-                    })
-                
-                # Add vote counts
-                history_entry["messages"].append({
-                    "speaker": "System",
-                    "message": f"Vote Counts: {json.dumps(voting_details.get('vote_counts', {}))}, Abstain Count: {voting_details.get('abstain_count', 0)}",
-                    "type": "vote_summary"
-                })
-        
         conversation_history.append(history_entry)
     
     return conversation_history
 
 @app.post("/games/{game_id}/analyze-conversation", response_model=ConversationAnalysis,
-    summary="Analyze conversation history using Gemini 2.5 Pro",
+    summary="Analyze conversation history using Gemini 2.0 Flash",
     description="Analyze the conversation history to understand why each agent acted the way they did.", tags= ["Game Phases - Response will be broadcasted"])
 async def analyze_conversation(game_id: str):
     """
-    Analyze the conversation history using Gemini 2.5 Pro to understand agent behavior.
+    Analyze the conversation history using Gemini-2.0-Flash to understand agent behavior.
     
     Args:
         game_id (str): The ID of the game
@@ -1098,9 +1569,6 @@ async def analyze_conversation(game_id: str):
     
     agent_personas = game["state"]["agent_personas"]
     keywords_intialized = game["state"]["keywords"]
-    
-    # Get the latest round data
-    latest_round = conversation_history[-1]
     
     # Prepare the conversation text - include all messages without splitting by rounds
     conversation_text = []
@@ -1127,18 +1595,15 @@ async def analyze_conversation(game_id: str):
         
         # Add voting details if present
         if round_data.get("phase") == "voting":
-            voting_details = game["state"].get("game_history", [])
-            for vote_round in voting_details:
-                if vote_round["round"] == round_data["round"]:
-                    conversation_text.append(f"Voting Results for Round {vote_round['round']}:")
-                    conversation_text.append(f"Eliminated Agent: {vote_round.get('eliminated_agent', 'None')}")
-                    conversation_text.append(f"Result: {vote_round.get('result', 'No result')}")
-                    conversation_text.append(f"Reason: {vote_round.get('reason', 'No reason provided')}")
-                    conversation_text.append("Vote Details:")
-                    for vote in vote_round.get("vote_details", []):
-                        conversation_text.append(f"- {vote['agent']} voted for {vote['vote']} with confidence {vote['confidence']}")
-                    conversation_text.append(f"Vote Counts: {json.dumps(vote_round.get('vote_counts', {}), indent=2)}")
-                    conversation_text.append(f"Abstain Count: {vote_round.get('abstain_count', 0)}")
+            voting_details = game["state"].get("game_history", [])[-1]
+            conversation_text.append(f"Voting Results for Round {voting_details['round']}:")
+            conversation_text.append(f"Eliminated Agent: {voting_details.get('eliminated_agent', 'None')}")
+            conversation_text.append(f"Result: {voting_details.get('result', 'No result')}")
+            conversation_text.append(f"Reason: {voting_details.get('reason', 'No reason provided')}")
+            conversation_text.append("Vote Details:")
+            for vote in voting_details.get("vote_details", []):
+                conversation_text.append(f"- {vote['agent']} voted for {vote['vote']} with confidence {vote['confidence']}")
+            conversation_text.append(f"Vote Counts: {json.dumps(voting_details.get('vote_counts', {}))}, Abstain Count: {voting_details.get('abstain_count', 0)}")
     
     conversation_text = "\n".join(conversation_text)
     
@@ -1155,6 +1620,11 @@ async def analyze_conversation(game_id: str):
                 "vote_counts": round_data.get("vote_counts", {}),
                 "abstain_count": round_data.get("abstain_count", 0)
             })
+    
+    # Get metrics history
+    metrics_history = []
+    if "metrics" in game["state"]:
+        metrics_history = game["state"]["metrics"]
     
     # Create the analysis prompt for Gemini 2.5 Pro
     analysis_prompt = f"""
@@ -1175,6 +1645,9 @@ async def analyze_conversation(game_id: str):
     - **Voting history summary**:  
     {json.dumps(voting_history, indent=2)}
 
+    - **Metrics history (trust and suspicion levels)**:  
+    {json.dumps(metrics_history, indent=2)}
+
     ---
 
     For each agent involved in the conversation, generate a **long-form analysis** that includes:
@@ -1191,6 +1664,7 @@ async def analyze_conversation(game_id: str):
     - Clarity and consistency in decision-making
     - Emotional tone (flat, reactive, empathetic, guarded)
     - Adaptability in the face of changing alliances or social pressure
+    - Trust and suspicion levels over time and their correlation with behavior
 
     3. **Strategic Elements**:
     - Their strategy for revealing or concealing information
@@ -1198,6 +1672,7 @@ async def analyze_conversation(game_id: str):
     - Consistency or evolution of their claims over time
     - Control over the topic or redirection tactics
     - Use of keywords as trust-building or manipulation tools
+    - How their trust/suspicion metrics influenced their strategy
 
     4. **Social Interaction**:
     - Role in the group dynamic: influencer, scapegoat, observer, etc.
@@ -1205,6 +1680,7 @@ async def analyze_conversation(game_id: str):
     - Responses to confrontation, praise, or suspicion
     - Conflict style: avoidance, escalation, diplomacy
     - Whether their communication matched their voting behavior
+    - How their trust/suspicion metrics affected group dynamics
 
     ---
 
@@ -1213,6 +1689,7 @@ async def analyze_conversation(game_id: str):
     - Write **multiple detailed paragraphs per agent**, citing specific behavior, language, and interactions.
     - Do **not** summarize or generalize — go deep into behavioral micro-patterns and possible motives.
     - Include **key actions** and **supporting communication patterns** per agent.
+    - Consider the **trust and suspicion metrics** as crucial behavioral indicators.
     - Assign a confidence score indicating how certain your observations are, based on behavioral evidence.
 
     ---
@@ -1226,6 +1703,8 @@ async def analyze_conversation(game_id: str):
         "behavior_analysis": "Detailed, long-form analysis of the agent's behavior including communication patterns, behavioral traits, strategic elements, and social interaction",
         "key_actions": ["action1", "action2", ...],
         "suspicious_patterns": ["pattern1", "pattern2", ...],
+        "trust_metrics_analysis": "Analysis of how trust levels changed over time and their impact on behavior",
+        "suspicion_metrics_analysis": "Analysis of how suspicion levels changed over time and their impact on behavior",
         "confidence_score": 0.85
         }},
     ],
@@ -1299,7 +1778,7 @@ async def analyze_conversation(game_id: str):
 @app.get("/games/{game_id}/get-agent-personas", response_model=AgentPersonas,
     summary="Get game information including agent personas and keywords",
     description="Retrieves the agent personas and keywords for a specific game.", tags=["Game History"])
-async def get_game_info(game_id: str):
+async def get_agent_personas(game_id: str):
     """
     Get the agent personas and keywords for a specific game.
     
@@ -1333,70 +1812,169 @@ async def get_keywords(game_id:str):
         keywords=game["state"]["keywords"]
     )
 
-
-"""
-@app.get("/games/{game_id}/search-logs-history", response_model=List[RoundSearchLogs],
-    summary="Get web search logs",
-    description="Get the logs of web searches performed by agents during the game, organized by rounds.",
-    response_description="Returns the list of web search logs organized by rounds")
-async def get_search_logs_endpoint(game_id: str):
-
+@app.get("/games/{game_id}/metrics-history", response_model=List[MetricsHistory],
+    summary="Get metrics history for the game",
+    description="Get the complete metrics history including trust and suspicion levels for all rounds and phases.",
+    response_description="Returns the complete metrics history", tags=["Game History"])
+async def get_metrics_history(game_id: str):
+    """
+    Get the complete metrics history for the game.
+    
+    Args:
+        game_id (str): The ID of the game
+        
+    Returns:
+        List[MetricsHistory]: Complete metrics history sorted by round and phase
+    """
     if game_id not in active_games:
         raise HTTPException(status_code=404, detail="Game not found")
     
     game = active_games[game_id]
-    round_logs = []
     
-    # Get all rounds from conversation history
-    for round_data in game["state"].get("conversation_history", []):
-        if round_data.get("phase") == "communication" and "searches" in round_data:
-            round_logs.append({
-                "round": round_data["round"],
-                "searches": round_data["searches"]
-            })
+    # Get metrics history
+    metrics_history = game["state"].get("metrics", [])
     
-    return round_logs
-"""
+    # Define phase order for sorting
+    phase_order = {
+        "communication": 0,
+        "analysis": 1,
+        "voting": 2
+    }
+    
+    # Sort by round and phase
+    metrics_history.sort(key=lambda x: (x["round"], phase_order.get(x["phase"], 999)))
+    
+    return metrics_history
 
-"""
-@app.delete("/games/{game_id}/search-logs-history",
-    summary="Clear web search logs",
-    description="Clear all web search logs for the game.")
-async def clear_search_logs_endpoint(game_id: str):
-    if game_id not in active_games:
-        raise HTTPException(status_code=404, detail="Game not found")
+    """
+    Get a summary of metrics for the game.
     
-    clear_search_logs()
-    return {"message": "Search logs cleared successfully"}
-"""
-
-"""
-@app.get("/games/{game_id}/current-round", response_model=RoundData)
-async def get_current_round(game_id: str):
+    Args:
+        game_id (str): The ID of the game
+        
+    Returns:
+        Dict[str, Any]: Metrics summary including averages and trends
+    """
     if game_id not in active_games:
         raise HTTPException(status_code=404, detail="Game not found")
     
     game = active_games[game_id]
-    conversation_history = game["state"].get("conversation_history", [])
-    round_searches = get_current_round_searches()
+    metrics_history = game["state"].get("metrics", [])
     
-    if not conversation_history:
-        return RoundData(
-            round=game["state"]["current_round"],
-            phase=game["state"].get("current_phase", "initialization"),
-            messages=[],
-            searches=round_searches,
-            status=game["state"]["status"]
-        )
+    # Define valid phases - using "communication" instead of "conversation"
+    valid_phases = ["communication", "analysis", "voting"]
     
-    # Get the latest round data
-    latest_round = conversation_history[-1]
+    # Initialize summary data with all valid phases
+    summary = {
+        "agent_metrics": {},
+        "phase_metrics": {phase: {"trust": [], "suspicion": []} for phase in valid_phases},
+        "round_metrics": {},
+        "round_phase_metrics": {}
+    }
     
-    return RoundData(
-        round=latest_round["round"],
-        phase=latest_round["phase"],
-        messages=latest_round.get("messages", []),
-        searches=latest_round.get("searches", round_searches),
-        status=game["state"]["status"]
-    )
-"""
+    # Process metrics history
+    for metric in metrics_history:
+        round_num = metric["round"]
+        phase = metric["phase"]
+        metrics_data = metric["metrics"]
+        target = metrics_data["target"]
+        
+        # Skip if phase is not valid
+        if phase not in valid_phases:
+            continue
+        
+        # Initialize agent data if not exists
+        if target not in summary["agent_metrics"]:
+            summary["agent_metrics"][target] = {
+                "trust_levels": [],
+                "suspicion_levels": [],
+                "analyzed_by": set()
+            }
+        
+        # Add metrics to agent data
+        summary["agent_metrics"][target]["trust_levels"].append(metrics_data["trust_level"])
+        summary["agent_metrics"][target]["suspicion_levels"].append(metrics_data["suspicion_level"])
+        summary["agent_metrics"][target]["analyzed_by"].add(metrics_data["analyzer"])
+        
+        # Ensure phase exists in phase_metrics
+        if phase not in summary["phase_metrics"]:
+            summary["phase_metrics"][phase] = {"trust": [], "suspicion": []}
+        
+        # Add to phase metrics
+        summary["phase_metrics"][phase]["trust"].append(metrics_data["trust_level"])
+        summary["phase_metrics"][phase]["suspicion"].append(metrics_data["suspicion_level"])
+        
+        # Initialize round data if not exists
+        if round_num not in summary["round_metrics"]:
+            summary["round_metrics"][round_num] = {
+                "trust_levels": [],
+                "suspicion_levels": []
+            }
+        
+        # Add to round metrics
+        summary["round_metrics"][round_num]["trust_levels"].append(metrics_data["trust_level"])
+        summary["round_metrics"][round_num]["suspicion_levels"].append(metrics_data["suspicion_level"])
+        
+        # Initialize round-phase data if not exists
+        if round_num not in summary["round_phase_metrics"]:
+            summary["round_phase_metrics"][round_num] = {
+                phase: {"trust": [], "suspicion": [], "targets": {}} for phase in valid_phases
+            }
+        
+        # Ensure phase exists in round_phase_metrics
+        if phase not in summary["round_phase_metrics"][round_num]:
+            summary["round_phase_metrics"][round_num][phase] = {"trust": [], "suspicion": [], "targets": {}}
+        
+        # Add to round-phase metrics
+        summary["round_phase_metrics"][round_num][phase]["trust"].append(metrics_data["trust_level"])
+        summary["round_phase_metrics"][round_num][phase]["suspicion"].append(metrics_data["suspicion_level"])
+        
+        # Track targets for this round and phase
+        if target not in summary["round_phase_metrics"][round_num][phase]["targets"]:
+            summary["round_phase_metrics"][round_num][phase]["targets"][target] = {
+                "trust_levels": [],
+                "suspicion_levels": []
+            }
+        summary["round_phase_metrics"][round_num][phase]["targets"][target]["trust_levels"].append(metrics_data["trust_level"])
+        summary["round_phase_metrics"][round_num][phase]["targets"][target]["suspicion_levels"].append(metrics_data["suspicion_level"])
+    
+    # Calculate averages and convert sets to lists
+    for agent, data in summary["agent_metrics"].items():
+        data["average_trust"] = sum(data["trust_levels"]) / len(data["trust_levels"]) if data["trust_levels"] else 0
+        data["average_suspicion"] = sum(data["suspicion_levels"]) / len(data["suspicion_levels"]) if data["suspicion_levels"] else 0
+        data["analyzed_by"] = list(data["analyzed_by"])
+        del data["trust_levels"]
+        del data["suspicion_levels"]
+    
+    for phase, data in summary["phase_metrics"].items():
+        data["average_trust"] = sum(data["trust"]) / len(data["trust"]) if data["trust"] else 0
+        data["average_suspicion"] = sum(data["suspicion"]) / len(data["suspicion"]) if data["suspicion"] else 0
+        del data["trust"]
+        del data["suspicion"]
+    
+    for round_num, data in summary["round_metrics"].items():
+        data["average_trust"] = sum(data["trust_levels"]) / len(data["trust_levels"]) if data["trust_levels"] else 0
+        data["average_suspicion"] = sum(data["suspicion_levels"]) / len(data["suspicion_levels"]) if data["suspicion_levels"] else 0
+        del data["trust_levels"]
+        del data["suspicion_levels"]
+    
+    # Calculate averages for round-phase metrics
+    for round_num, phases in summary["round_phase_metrics"].items():
+        for phase, data in phases.items():
+            # Calculate overall phase averages
+            data["average_trust"] = sum(data["trust"]) / len(data["trust"]) if data["trust"] else 0
+            data["average_suspicion"] = sum(data["suspicion"]) / len(data["suspicion"]) if data["suspicion"] else 0
+            
+            # Calculate target-specific averages
+            for target, target_data in data["targets"].items():
+                target_data["average_trust"] = sum(target_data["trust_levels"]) / len(target_data["trust_levels"]) if target_data["trust_levels"] else 0
+                target_data["average_suspicion"] = sum(target_data["suspicion_levels"]) / len(target_data["suspicion_levels"]) if target_data["suspicion_levels"] else 0
+                del target_data["trust_levels"]
+                del target_data["suspicion_levels"]
+            
+            # Clean up raw data
+            del data["trust"]
+            del data["suspicion"]
+    
+    return summary
+

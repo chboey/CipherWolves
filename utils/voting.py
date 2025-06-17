@@ -3,8 +3,41 @@ import re
 import math
 from google.genai.types import Content, Part
 
+
+# Voting mechanism session for imposter detection
+async def voting_session(agents, session_services, memory_services, runners, 
+                        complete_conversation, user_analyses, werewolf):
+    """
+    Conduct a single voting round where agents vote for who they think is the imposter.
+    
+    Args:
+        agents (list): List of initialized agents
+        session_services (dict): Map of agent name to session service
+        memory_services (dict): Map of agent name to memory service
+        runners (dict): Map of agent name to runner
+        complete_conversation (list): Log of the complete conversation
+        user_analyses (list): List of user inputs and agent analyses
+        werewolf (agent): the selected imposter.
+        
+    Returns:
+        dict: Complete voting results including votes, counts, and elimination details
+    """
+    # Conduct single voting round
+    round_result = await conduct_voting_round(
+        agents, session_services, memory_services, runners,
+        complete_conversation, user_analyses, [], 1, werewolf
+    )
+    
+    # Process round result
+    if round_result["action"] == "eliminate":
+        eliminated_agent = round_result["eliminated_agent"]
+        return round_result
+        
+    elif round_result["action"] == "no_elimination":
+        return round_result
+
 async def conduct_voting_round(remaining_agents, session_services, memory_services, runners,
-                              complete_conversation, user_analyses, game_history, round_number):
+                              complete_conversation, user_analyses, game_history, round_number, werewolf):
     """
     Conduct a single voting round.
     
@@ -30,6 +63,9 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
         history_context = "\n\nPrevious Voting Rounds:\n"
         for i, round_data in enumerate(game_history, 1):
             history_context += f"Round {i}: {round_data['summary']}\n"
+            if "trust_levels" in round_data and "suspicion_levels" in round_data:
+                history_context += f"Trust Levels: {round_data['trust_levels']}\n"
+                history_context += f"Suspicion Levels: {round_data['suspicion_levels']}\n"
     
     # Create agent names list for voting options
     agent_names = [agent.name for agent in remaining_agents]
@@ -54,6 +90,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     1. The original conversation between agents
     2. Questions asked by the HUMAN USER during the analysis phase and how each agent responded
     3. Previous voting history
+    4. Trust and suspicion levels from previous rounds
     
     When you see your name, refer to yourself as I. Example: As I have said earlier.
     
@@ -63,6 +100,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     3. Previous voting patterns and defensive behavior
     4. Overall suspicion level based on all interactions
     5. How agents responded to the HUMAN USER's analysis questions - were they evasive, defensive, or cooperative?
+    6. Trust and suspicion levels from previous rounds - consider how they've changed based on voting behavior
     
     VOTING OPTIONS:
     - Vote to ELIMINATE a specific agent that is not yourself.
@@ -78,13 +116,11 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     VOTE: [AGENT_NAME or ABSTAIN]
     REASONING: [Your detailed reasoning for the vote]
     CONFIDENCE: [LOW/MEDIUM/HIGH]
-    SUSPICION_LEVEL: [How suspicious you are of your target on a scale 1-10]
     
     Example:
     VOTE: Agent_B
-    REASONING: Agent_B's responses have been inconsistent and their keyword usage feels forced. They also gave evasive answers to the HUMAN USER's analysis questions, which is suspicious behavior.
+    REASONING: Agent_B's responses have been inconsistent and their keyword usage feels forced. They also gave evasive answers to the HUMAN USER's analysis questions, which is suspicious behavior. Their trust level has decreased in previous rounds due to voting for innocent players.
     CONFIDENCE: HIGH
-    SUSPICION_LEVEL: 8
     """
     
     # Get votes sequentially from remaining agents
@@ -106,8 +142,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
         await asyncio.sleep(2)
     
     # Process voting results
-    return await process_round_results(votes, remaining_agents, round_number)
-
+    return await process_round_results(votes, remaining_agents, round_number, werewolf)
 
 async def get_agent_vote(agent, runner, session_service, memory_service, voting_prompt):
     """
@@ -171,9 +206,7 @@ async def get_agent_vote(agent, runner, session_service, memory_service, voting_
         return agent.name, vote_data
     
     except Exception as e:
-        # print(f"Error in agent voting for {agent.name}: {str(e)}")
         return agent.name, f"Error during voting phase: {str(e)}"
-
 
 def parse_vote_response(response):
     """
@@ -186,7 +219,6 @@ def parse_vote_response(response):
         "vote": "ABSTAIN",
         "reasoning": "No reasoning provided",
         "confidence": "NONE",
-        "suspicion_level": 0,
         "raw_response": response
     }
     
@@ -215,7 +247,7 @@ def parse_vote_response(response):
     
     return vote_data
 
-async def process_round_results(votes, remaining_agents, round_number):
+async def process_round_results(votes, remaining_agents, round_number, werewolf):
     """
     Process the voting results and determine the round outcome.
     
@@ -241,7 +273,6 @@ async def process_round_results(votes, remaining_agents, round_number):
             "vote": vote_data["vote"],
             "reasoning": vote_data["reasoning"],
             "confidence": vote_data["confidence"],
-            "suspicion_level": vote_data["suspicion_level"]
         })
         
         # Count the vote
@@ -268,7 +299,6 @@ async def process_round_results(votes, remaining_agents, round_number):
     
     # Check for majority abstention
     if abstain_count >= majority_threshold:
-        # print("🤝 MAJORITY ABSTAINED - No elimination this round")
         return {
             "action": "no_elimination",
             "reason": "Majority abstained",
@@ -287,9 +317,7 @@ async def process_round_results(votes, remaining_agents, round_number):
         
         # Find the agent object
         eliminated_agent = next(agent for agent in remaining_agents if agent.name == eliminated_name)
-        
-        # print(f"⚖️ MAJORITY DECISION - {eliminated_name} is ELIMINATED ({vote_count} votes)")
-        
+               
         return {
             "action": "eliminate",
             "eliminated_agent": eliminated_agent,
@@ -324,7 +352,6 @@ async def process_round_results(votes, remaining_agents, round_number):
             else:
                 reason = f"Tie between {', '.join(tied_candidates)} with {highest_votes} votes each"
         else:
-            # print("❌ NO VOTES CAST - All abstained or invalid votes")
             reason = "No valid votes cast"
         
         return {
