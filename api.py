@@ -21,6 +21,7 @@ from google.adk.memory import InMemoryMemoryService
 from google.genai.types import Content, Part
 from google import genai
 from google.genai.types import HttpOptions
+from dotenv import load_dotenv
 
 app = FastAPI(
     title="CipherWolves Game API",
@@ -161,6 +162,7 @@ async def create_game(config: GameConfig):
         GameResponse: Game ID and success message
     """
     try:
+        load_dotenv()  # This loads environment variables from a .env file into the environment
         # Generate keywords
         keywords = generate_keywords(config.num_keywords)
         
