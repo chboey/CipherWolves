@@ -22,6 +22,7 @@ from google.genai.types import Content, Part
 from google import genai
 from google.genai.types import HttpOptions
 from dotenv import load_dotenv
+from fastapi import APIRouter
 
 app = FastAPI(
     title="CipherWolves Game API",
@@ -1216,6 +1217,31 @@ async def proceed_voting(game_id: str):
                 "timestamp": get_gmt8_timestamp()
             })
         
+        # Add voting results to conversation_history for this round
+        voting_messages = []
+        # Add eliminated agent
+        # Add vote details
+        for vote in round_result.get("vote_details", []):
+            voting_messages.append({
+                "speaker": vote["agent"],
+                "message": f"Voted for {vote['vote']} with confidence {vote['confidence']}. Reason: {vote['reasoning']}",
+                "type": "vote_detail"
+            })
+        # Add vote counts and abstain count
+        voting_messages.append({
+            "speaker": "System",
+            "message": f"Vote Counts: {json.dumps(round_result.get('vote_counts', {}))}, Abstain Count: {round_result.get('abstain_count', 0)}",
+            "type": "vote_summary"
+        })
+        # Add to conversation_history
+        if "conversation_history" not in game["state"]:
+            game["state"]["conversation_history"] = []
+        game["state"]["conversation_history"].append({
+            "round": game["state"]["current_round"],
+            "phase": "voting",
+            "messages": voting_messages
+        })
+        
         # Broadcast voting results first
         if game_id in active_streams:
             # First broadcast the action and eliminated agent
@@ -1542,6 +1568,46 @@ async def get_conversation_history(game_id: str):
                     "message": response,
                     "type": "analysis_response"
                 })
+
+        # Add voting results if this phase is voting
+        if round_data.get("phase") == "voting":
+            # Find the voting result for this round in game_history
+            voting_result = None
+            for vr in game["state"].get("game_history", []):
+                if vr.get("phase") == "voting" and vr.get("round") == round_data["round"]:
+                    voting_result = vr
+                    break
+            if voting_result:
+                # Add eliminated agent
+                history_entry["messages"].append({
+                    "speaker": "System",
+                    "message": f"Eliminated Agent: {voting_result.get('eliminated_agent', 'None')}",
+                    "type": "voting_result"
+                })
+                # Add result and reason
+                history_entry["messages"].append({
+                    "speaker": "System",
+                    "message": f"Result: {voting_result.get('result', 'No result')}",
+                    "type": "voting_result"
+                })
+                history_entry["messages"].append({
+                    "speaker": "System",
+                    "message": f"Reason: {voting_result.get('reason', 'No reason provided')}",
+                    "type": "voting_result"
+                })
+                # Add vote details
+                for vote in voting_result.get("vote_details", []):
+                    history_entry["messages"].append({
+                        "speaker": vote["agent"],
+                        "message": f"Voted for {vote['vote']} with confidence {vote['confidence']}. Reason: {vote['reasoning']}",
+                        "type": "vote_detail"
+                    })
+                # Add vote counts and abstain count
+                history_entry["messages"].append({
+                    "speaker": "System",
+                    "message": f"Vote Counts: {json.dumps(voting_result.get('vote_counts', {}))}, Abstain Count: {voting_result.get('abstain_count', 0)}",
+                    "type": "vote_summary"
+                })
         
         conversation_history.append(history_entry)
     
@@ -1821,162 +1887,90 @@ async def get_keywords(game_id:str):
 async def get_metrics_history(game_id: str):
     """
     Get the complete metrics history for the game.
-    
     Args:
         game_id (str): The ID of the game
-        
     Returns:
         List[MetricsHistory]: Complete metrics history sorted by round and phase
     """
     if game_id not in active_games:
         raise HTTPException(status_code=404, detail="Game not found")
-    
     game = active_games[game_id]
-    
-    # Get metrics history
     metrics_history = game["state"].get("metrics", [])
-    
+    phase_order = {
+        "communication": 0,
+        "analysis": 1,
+        "voting": 2
+    }
+    metrics_history.sort(key=lambda x: (x["round"], phase_order.get(x["phase"], 999)))
+    return metrics_history
+
+@app.get("/games/{game_id}/metrics-matrix",
+    summary="Get trust/suspicion matrix for each communication and voting phase",
+    description="Returns, for each communication and voting phase, the trust and suspicion levels for all agents from each analyzer, filling missing values from the most recent previous phase. Skips analysis phases.",
+    tags=["Game History"])
+async def get_metrics_matrix(game_id: str):
+    if game_id not in active_games:
+        raise HTTPException(status_code=404, detail="Game not found")
+    game = active_games[game_id]
+    metrics_history = game["state"].get("metrics", [])
+    # Get all agent names
+    agent_names = set()
+    for m in metrics_history:
+        agent_names.add(m["metrics"].get("target"))
+    agent_names = list(agent_names)
+    # Get all analyzers
+    analyzers = set()
+    for m in metrics_history:
+        analyzers.add(m["metrics"].get("analyzer"))
+    analyzers = list(analyzers)
     # Define phase order for sorting
     phase_order = {
         "communication": 0,
         "analysis": 1,
         "voting": 2
     }
-    
-    # Sort by round and phase
     metrics_history.sort(key=lambda x: (x["round"], phase_order.get(x["phase"], 999)))
-    
-    return metrics_history
+    # Build a lookup for latest trust/suspicion for each (analyzer, target) up to each round/phase
+    latest_metrics = {}  # (analyzer, target) -> {"trust_level":..., "suspicion_level":...}
+    output = []
+    for m in metrics_history:
+        round_num = m["round"]
+        phase = m["phase"]
+        analyzer = m["metrics"].get("analyzer")
+        target = m["metrics"].get("target")
+        trust = m["metrics"].get("trust_level")
+        suspicion = m["metrics"].get("suspicion_level")
+        # Always update latest
+        if analyzer and target:
+            latest_metrics[(analyzer, target)] = {"trust_level": trust, "suspicion_level": suspicion}
+        # For communication or voting phase, build a full matrix for each analyzer
+        if phase in ("communication", "voting"):
+            for a in analyzers:
+                trust_suspicion = {}
+                for t in agent_names:
+                    # Find if there is a metric for this analyzer/target in this round/phase
+                    found = False
+                    for mm in metrics_history:
+                        if mm["round"] == round_num and mm["phase"] == phase and mm["metrics"].get("analyzer") == a and mm["metrics"].get("target") == t:
+                            trust_suspicion[t] = {
+                                "trust_level": mm["metrics"].get("trust_level"),
+                                "suspicion_level": mm["metrics"].get("suspicion_level")
+                            }
+                            found = True
+                            break
+                    if not found:
+                        # Fallback to latest previous value
+                        prev = latest_metrics.get((a, t))
+                        if prev:
+                            trust_suspicion[t] = prev
+                        else:
+                            trust_suspicion[t] = {"trust_level": None, "suspicion_level": None}
+                output.append({
+                    "round": round_num,
+                    "phase": phase,
+                    "analyzer": a,
+                    "trust_suspicion": trust_suspicion
+                })
+    return output
 
-    """
-    Get a summary of metrics for the game.
     
-    Args:
-        game_id (str): The ID of the game
-        
-    Returns:
-        Dict[str, Any]: Metrics summary including averages and trends
-    """
-    if game_id not in active_games:
-        raise HTTPException(status_code=404, detail="Game not found")
-    
-    game = active_games[game_id]
-    metrics_history = game["state"].get("metrics", [])
-    
-    # Define valid phases - using "communication" instead of "conversation"
-    valid_phases = ["communication", "analysis", "voting"]
-    
-    # Initialize summary data with all valid phases
-    summary = {
-        "agent_metrics": {},
-        "phase_metrics": {phase: {"trust": [], "suspicion": []} for phase in valid_phases},
-        "round_metrics": {},
-        "round_phase_metrics": {}
-    }
-    
-    # Process metrics history
-    for metric in metrics_history:
-        round_num = metric["round"]
-        phase = metric["phase"]
-        metrics_data = metric["metrics"]
-        target = metrics_data["target"]
-        
-        # Skip if phase is not valid
-        if phase not in valid_phases:
-            continue
-        
-        # Initialize agent data if not exists
-        if target not in summary["agent_metrics"]:
-            summary["agent_metrics"][target] = {
-                "trust_levels": [],
-                "suspicion_levels": [],
-                "analyzed_by": set()
-            }
-        
-        # Add metrics to agent data
-        summary["agent_metrics"][target]["trust_levels"].append(metrics_data["trust_level"])
-        summary["agent_metrics"][target]["suspicion_levels"].append(metrics_data["suspicion_level"])
-        summary["agent_metrics"][target]["analyzed_by"].add(metrics_data["analyzer"])
-        
-        # Ensure phase exists in phase_metrics
-        if phase not in summary["phase_metrics"]:
-            summary["phase_metrics"][phase] = {"trust": [], "suspicion": []}
-        
-        # Add to phase metrics
-        summary["phase_metrics"][phase]["trust"].append(metrics_data["trust_level"])
-        summary["phase_metrics"][phase]["suspicion"].append(metrics_data["suspicion_level"])
-        
-        # Initialize round data if not exists
-        if round_num not in summary["round_metrics"]:
-            summary["round_metrics"][round_num] = {
-                "trust_levels": [],
-                "suspicion_levels": []
-            }
-        
-        # Add to round metrics
-        summary["round_metrics"][round_num]["trust_levels"].append(metrics_data["trust_level"])
-        summary["round_metrics"][round_num]["suspicion_levels"].append(metrics_data["suspicion_level"])
-        
-        # Initialize round-phase data if not exists
-        if round_num not in summary["round_phase_metrics"]:
-            summary["round_phase_metrics"][round_num] = {
-                phase: {"trust": [], "suspicion": [], "targets": {}} for phase in valid_phases
-            }
-        
-        # Ensure phase exists in round_phase_metrics
-        if phase not in summary["round_phase_metrics"][round_num]:
-            summary["round_phase_metrics"][round_num][phase] = {"trust": [], "suspicion": [], "targets": {}}
-        
-        # Add to round-phase metrics
-        summary["round_phase_metrics"][round_num][phase]["trust"].append(metrics_data["trust_level"])
-        summary["round_phase_metrics"][round_num][phase]["suspicion"].append(metrics_data["suspicion_level"])
-        
-        # Track targets for this round and phase
-        if target not in summary["round_phase_metrics"][round_num][phase]["targets"]:
-            summary["round_phase_metrics"][round_num][phase]["targets"][target] = {
-                "trust_levels": [],
-                "suspicion_levels": []
-            }
-        summary["round_phase_metrics"][round_num][phase]["targets"][target]["trust_levels"].append(metrics_data["trust_level"])
-        summary["round_phase_metrics"][round_num][phase]["targets"][target]["suspicion_levels"].append(metrics_data["suspicion_level"])
-    
-    # Calculate averages and convert sets to lists
-    for agent, data in summary["agent_metrics"].items():
-        data["average_trust"] = sum(data["trust_levels"]) / len(data["trust_levels"]) if data["trust_levels"] else 0
-        data["average_suspicion"] = sum(data["suspicion_levels"]) / len(data["suspicion_levels"]) if data["suspicion_levels"] else 0
-        data["analyzed_by"] = list(data["analyzed_by"])
-        del data["trust_levels"]
-        del data["suspicion_levels"]
-    
-    for phase, data in summary["phase_metrics"].items():
-        data["average_trust"] = sum(data["trust"]) / len(data["trust"]) if data["trust"] else 0
-        data["average_suspicion"] = sum(data["suspicion"]) / len(data["suspicion"]) if data["suspicion"] else 0
-        del data["trust"]
-        del data["suspicion"]
-    
-    for round_num, data in summary["round_metrics"].items():
-        data["average_trust"] = sum(data["trust_levels"]) / len(data["trust_levels"]) if data["trust_levels"] else 0
-        data["average_suspicion"] = sum(data["suspicion_levels"]) / len(data["suspicion_levels"]) if data["suspicion_levels"] else 0
-        del data["trust_levels"]
-        del data["suspicion_levels"]
-    
-    # Calculate averages for round-phase metrics
-    for round_num, phases in summary["round_phase_metrics"].items():
-        for phase, data in phases.items():
-            # Calculate overall phase averages
-            data["average_trust"] = sum(data["trust"]) / len(data["trust"]) if data["trust"] else 0
-            data["average_suspicion"] = sum(data["suspicion"]) / len(data["suspicion"]) if data["suspicion"] else 0
-            
-            # Calculate target-specific averages
-            for target, target_data in data["targets"].items():
-                target_data["average_trust"] = sum(target_data["trust_levels"]) / len(target_data["trust_levels"]) if target_data["trust_levels"] else 0
-                target_data["average_suspicion"] = sum(target_data["suspicion_levels"]) / len(target_data["suspicion_levels"]) if target_data["suspicion_levels"] else 0
-                del target_data["trust_levels"]
-                del target_data["suspicion_levels"]
-            
-            # Clean up raw data
-            del data["trust"]
-            del data["suspicion"]
-    
-    return summary
-

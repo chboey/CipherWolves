@@ -103,7 +103,7 @@ async def conduct_voting_round(remaining_agents, session_services, memory_servic
     6. Trust and suspicion levels from previous rounds - consider how they've changed based on voting behavior
     
     VOTING OPTIONS:
-    - Vote to ELIMINATE a specific agent that is not yourself.
+    - Vote to ELIMINATE a specific agent that is not yourself and is not the USER/user or HUMAN/human.
     - ABSTAIN: If you don't have enough evidence (but be careful - abstaining helps the werewolf!)
     
     IMPORTANT GAME RULES:
