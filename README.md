@@ -79,7 +79,7 @@ Under the hood, CipherWolves is engineered for scale, speed, and smart decision-
 Every agent is modular, every phase is documented, and every interaction is trackable.
 
 # 🧠 How We Used the Agent Development Kit
-![ADK Utilisation](https://github.com/user-attachments/assets/66844331-3a6a-4c6c-8419-6ecdfe2b86ff)
+[![ADK Utilisation](https://github.com/user-attachments/assets/66844331-3a6a-4c6c-8419-6ecdfe2b86ff)](https://github.com/user-attachments/assets/66844331-3a6a-4c6c-8419-6ecdfe2b86ff)
 
 CipherWolves runs on the Agent Development Kit (ADK), a modular framework purpose-built for creating socially intelligent, memory-enabled agents. It lets us move beyond stateless LLM calls into a persistent multi-agent environment.
 
