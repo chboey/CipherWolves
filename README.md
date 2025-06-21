@@ -1,6 +1,6 @@
 ![CipherWolves Screenshot](https://github.com/user-attachments/assets/ddf94d06-2502-48f4-953e-e219e079b31e)
 ### Challenge: Automation of Complex Processes
-# 🔍 Introduction & Problem Statement
+## 🔍 Introduction & Problem Statement
 
 In today's organizations, automating multi-step workflows—like software delivery, business approvals, or incident response—remains a massive challenge.
 
@@ -8,7 +8,7 @@ These processes aren't linear. They require human judgment, real-time debate, sh
 
 So we asked: How can we automate complex, multi-phase workflows using intelligent agents—while preserving reliability, transparency, and adaptability?
 
-# 💡 Solution: 🐺CipherWolves
+## 💡 Solution: 🐺CipherWolves
 ![CipherWolves-GameScene](https://github.com/user-attachments/assets/81d5fe87-ef84-4c93-ba6a-c25ce5784201)
 Enter CipherWolves—an AI-native platform that simulates human-style decision-making through a team of autonomous, reasoning agents.
 
@@ -30,7 +30,7 @@ This isn’t just multi-agent automation. This is collaborative reasoning under 
 
 What sets CipherWolves apart is its social intelligence: each agent maintains dynamic trust and suspicion scores toward others, influencing every move. These internal metrics evolve in real time, driving alliance-building, deception, and betrayal—mirroring the messy, emotional calculus behind real human decisions.
 
-# 🧠 Post-Game Analysis: Autonomous Reflection at Scale
+## 🧠 Post-Game Analysis: Autonomous Reflection at Scale
 ![PGA](https://github.com/user-attachments/assets/4dbbf17a-6f79-40bd-ac8e-5a7db8ddef1e)
 CipherWolves doesn’t just simulate decision-making—it learns from it.
 
@@ -58,7 +58,7 @@ Users gain full access to the cognitive blueprint of the match:
 - 📜 **Behavioral Summaries**: Agent-specific breakdowns of decisions and logic flows
 
 
-# 🌍 Impact
+## 🌍 Impact
 CipherWolves demonstrates how AI agents can automate and enhance complex, collaborative workflows that traditionally depend on human judgment and negotiation. By simulating nuanced group dynamics, CipherWolves provides a blueprint for:
 - Automating decision-making in high-stakes environments (e.g., incident response, business approvals)
 - Improving transparency and auditability of group decisions
@@ -67,7 +67,7 @@ CipherWolves demonstrates how AI agents can automate and enhance complex, collab
 
 CipherWolves is not just a game simulation—it's a testbed for the future of collaborative automation.
 
-# 🏗️ Architecture Overview
+## 🏗️ Architecture Overview
 ![Architecture Overview](https://github.com/user-attachments/assets/26b46237-ff18-4ecd-bc53-a18a05fad214)
 Under the hood, CipherWolves is engineered for scale, speed, and smart decision-making:
 
@@ -78,7 +78,7 @@ Under the hood, CipherWolves is engineered for scale, speed, and smart decision-
 
 Every agent is modular, every phase is documented, and every interaction is trackable.
 
-# 🧠 How We Used the Agent Development Kit
+## 🧠 How We Used the Agent Development Kit
 [![ADK Utilisation](https://github.com/user-attachments/assets/66844331-3a6a-4c6c-8419-6ecdfe2b86ff)](https://github.com/user-attachments/assets/66844331-3a6a-4c6c-8419-6ecdfe2b86ff)
 
 CipherWolves runs on the Agent Development Kit (ADK), a modular framework purpose-built for creating socially intelligent, memory-enabled agents. It lets us move beyond stateless LLM calls into a persistent multi-agent environment.
@@ -101,7 +101,7 @@ Here's how we engineered it:
     
     Trust and suspicion metrics are stored in MemoryService. This long-term store allows agents to develop historical context over the course of the workflow—mirroring how human memory informs judgment over time.
 
-# 🛠️ Technology Stack
+## 🛠️ Technology Stack
 
 ### 🧱 Core Frameworks
 - **Google ADK (Agent Development Kit)** — Primary agent orchestration framework  
@@ -119,7 +119,7 @@ Here's how we engineered it:
 - `faker` — Keyword and agent data generation  
 
 
-# 🕹️ Short Guidance on Usage
+## 🕹️ Short Guidance on Usage
 
 ### How to Play:
 1. You can experience CipherWolves live at **[cipherwolves.vercel.app](https://cipherwolves.vercel.app)**.
