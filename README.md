@@ -1,5 +1,5 @@
 ![CipherWolves Screenshot](https://github.com/user-attachments/assets/ddf94d06-2502-48f4-953e-e219e079b31e)
-
+### Challenge: Automation of Complex Processes
 # 🔍 Introduction & Problem Statement
 
 In today's organizations, automating multi-step workflows—like software delivery, business approvals, or incident response—remains a massive challenge.
