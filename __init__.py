@@ -1,3 +1,0 @@
-"""
-CipherWolves package
-""" 
