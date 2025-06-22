@@ -291,16 +291,16 @@ async def get_game_state(game_id: str):
     game = active_games[game_id]
     
     # Create a filtered game state without game_history
-    filtered_state = {
-        "game_id": game["state"]["game_id"],
-        "status": game["state"]["status"],
-        "current_round": game["state"]["current_round"],
-        "current_phase": game["state"].get("current_phase", "initialization"),  # Default to initialization if not set
-        "remaining_agents": game["state"]["remaining_agents"],
-        "eliminated_agents": game["state"]["eliminated_agents"],
-        "werewolf": game["state"]["werewolf"],
-        "result": game["state"].get("result")
-    }
+    filtered_state = GameState(
+        game_id=game["state"]["game_id"],
+        status=game["state"]["status"],
+        current_round=game["state"]["current_round"],
+        current_phase=game["state"].get("current_phase", "initialization"),  # Default to initialization if not set
+        remaining_agents=game["state"]["remaining_agents"],
+        eliminated_agents=game["state"]["eliminated_agents"],
+        werewolf=game["state"]["werewolf"],
+        result=game["state"].get("result")
+    )
     
     return filtered_state
 
