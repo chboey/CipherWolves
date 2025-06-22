@@ -38,7 +38,7 @@ In both settings, agents must:
 CipherWolves doesn’t simplify this complexity.  
 It **embraces** it.
 
-Each AI agent embodies a **distinct reasoning or communication style** via personalized personas — not as characters, but as **functional archetypes** of group behavior.
+> Each AI agent embodies a **distinct reasoning or communication style** via personalized personas — not as characters, but as **functional archetypes** of group behavior.
 
 To drive automation across complex scenarios, agents collaborate through **three structured phases**:
 
@@ -59,8 +59,7 @@ This is **collaborative reasoning under pressure** — a living simulation of ho
 
 What sets CipherWolves apart is its **social intelligence**:  
 
-Each agent maintains **dynamic trust and suspicion scores** toward others, influencing every move.  
-These internal metrics evolve in real time — driving **alliance-building, deception, and betrayal** — mirroring the messy, emotional calculus behind **real human decisions**.
+> Each agent maintains **dynamic trust and suspicion scores** toward others, influencing every move.  These internal metrics evolve in real time — driving **alliance-building, deception, and betrayal** — mirroring the messy, emotional calculus behind **real human decisions**.
 
 ## 🧠 Post-Game Analysis: Autonomous Reflection at Scale
 ![PGA](https://github.com/user-attachments/assets/4dbbf17a-6f79-40bd-ac8e-5a7db8ddef1e)
@@ -97,7 +96,7 @@ CipherWolves demonstrates how AI agents can automate and enhance complex, collab
 - Stress-testing organizational processes in a safe, simulated environment
 - Accelerating the development of robust, adaptable AI-driven workflows
 
-CipherWolves is not just a game simulation—it's a testbed for the future of collaborative automation.
+> CipherWolves is not just a game simulation—it's a testbed for the future of collaborative automation.
 
 ## 🏗️ Architecture Overview
 ![Architecture Overview](https://github.com/user-attachments/assets/26b46237-ff18-4ecd-bc53-a18a05fad214)
@@ -108,7 +107,7 @@ Under the hood, CipherWolves is engineered for scale, speed, and smart decision-
 - Google AI Developer Kit (ADK) enables rapid iteration and low-latency model integration—letting us deploy agent personalities and reasoning styles on the fly.
 - Tavily supercharges context awareness by fetching live, real-world data—allowing agents to reference timely, relevant knowledge and adapt strategies accordingly.
 
-Every agent is modular, every phase is documented, and every interaction is trackable.
+> Every agent is modular, every phase is documented, and every interaction is trackable.
 
 ## 🧠 How We Used the Agent Development Kit
 [![ADK Utilisation](https://github.com/user-attachments/assets/66844331-3a6a-4c6c-8419-6ecdfe2b86ff)](https://github.com/user-attachments/assets/66844331-3a6a-4c6c-8419-6ecdfe2b86ff)
