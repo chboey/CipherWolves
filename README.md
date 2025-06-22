@@ -1,4 +1,4 @@
-![CipherWolves Screenshot](![CipherWolves Screenshot](https://github.com/user-attachments/assets/1bf6b296-49c0-4751-99b5-3b0ef83bdf54)
+![CipherWolves Screenshot](https://github.com/user-attachments/assets/1bf6b296-49c0-4751-99b5-3b0ef83bdf54)
 ### Challenge: Automation of Complex Processes
 ## 🔍 Introduction & Problem Statement
 
