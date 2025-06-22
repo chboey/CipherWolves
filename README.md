@@ -1,34 +1,66 @@
 ![CipherWolves Screenshot](https://github.com/user-attachments/assets/1bf6b296-49c0-4751-99b5-3b0ef83bdf54)
 ### Challenge: Automation of Complex Processes
-## 🔍 Introduction & Problem Statement
 
-In today's organizations, automating multi-step workflows—like software delivery, business approvals, or incident response—remains a massive challenge.
+## 🚨 The Challenge: Complex Workflows, Human Bottlenecks
 
-These processes aren't linear. They require human judgment, real-time debate, shifting priorities, and context that can't be captured by rigid pipelines.
+In modern organizations, **multi-step workflows**—like software delivery, incident response, or business approvals—are no longer just checklists. They're living systems of **coordination, judgment, and trust**.
 
-So we asked: How can we automate complex, multi-phase workflows using intelligent agents—while preserving reliability, transparency, and adaptability?
+Yet automation still struggles here.
+
+Why? Because these processes aren’t linear:
+
+- They involve **conflicting goals**
+- They demand **real-time human debate**
+- They shift with **organizational context and pressure**
+- They rely on **intuition and negotiation**, not just logic
+
+Rigid pipelines break under this kind of nuance.
+
+So we asked ourselves the hard question:
+
+> 💭 **How can we automate complex, high-stakes workflows using intelligent agents—without losing the human elements that make them work?**
+
+We weren’t looking for robotic efficiency.  
+We were chasing **reliable, explainable collaboration**—at machine scale.
 
 ## 💡 Solution: 🐺CipherWolves
 ![CipherWolves-GameScene](https://github.com/user-attachments/assets/81d5fe87-ef84-4c93-ba6a-c25ce5784201)
-Enter CipherWolves—an AI-native platform that simulates human-style decision-making through a team of autonomous, reasoning agents.
+**Enter CipherWolves** — an AI-native platform that simulates human-style decision-making through a team of autonomous, reasoning agents.
 
-We showcase this through a simulation of the social deduction game Werewolf—not for entertainment, but because it captures the ambiguity, conflict, and coordination challenges found in real-world group workflows.
+We showcase this through a simulation of the social deduction game **Werewolf** — not for entertainment, but because it captures the **ambiguity, conflict, and coordination challenges** found in real-world group workflows.
 
-In both settings, agents must operate under uncertainty, adapt to shifting dynamics, and align on high-stakes decisions—even when trust is fractured and goals diverge.
+In both settings, agents must:
 
-CipherWolves doesn’t simplify this complexity. It embraces it. Each AI agent embodies a distinct reasoning or communication style via personalized personas—not as characters, but as functional archetypes of group behavior.
+- Operate under uncertainty  
+- Adapt to shifting dynamics  
+- Align on high-stakes decisions — even when **trust is fractured** and **goals diverge**
 
-To drive automation across complex scenarios, agents collaborate through three structured phases:
+CipherWolves doesn’t simplify this complexity.  
+It **embraces** it.
 
-- Communication – Prompt-driven dialogue surfaces competing observations and strategies. Agents leverage Tavily-powered web search to enrich their reasoning, strategically sourcing external context to strengthen arguments or sow misdirection.
+Each AI agent embodies a **distinct reasoning or communication style** via personalized personas — not as characters, but as **functional archetypes** of group behavior.
 
-- Analysis – Agents independently interpret conversations, weighing motives and behaviors. Some will challenge the user. Others will target fellow agents. All act with evolving memory and bias.
+To drive automation across complex scenarios, agents collaborate through **three structured phases**:
 
-- Voting – Through tension, persuasion, and shifting alliances, agents converge on a collective decision—sometimes rational, sometimes irrational, but always explainable.
+### 🗣️ Communication  
+Prompt-driven dialogue surfaces **competing observations and strategies**.  
+Agents leverage **Tavily-powered web search** to enrich their reasoning — strategically sourcing external context to strengthen arguments or **sow misdirection**.
 
-This isn’t just multi-agent automation. This is collaborative reasoning under pressure—a living simulation of how teams argue, align, and act.
+### 🧠 Analysis  
+Agents **independently interpret** conversations, weighing motives and behaviors.  
+Some will **challenge the user**. Others will **target fellow agents**.  
+All act with **evolving memory and bias**.
 
-What sets CipherWolves apart is its social intelligence: each agent maintains dynamic trust and suspicion scores toward others, influencing every move. These internal metrics evolve in real time, driving alliance-building, deception, and betrayal—mirroring the messy, emotional calculus behind real human decisions.
+### 🗳️ Voting  
+Through **tension**, **persuasion**, and **shifting alliances**, agents converge on a **collective decision** — sometimes rational, sometimes irrational, but always **explainable**.
+
+This isn’t just multi-agent automation.  
+This is **collaborative reasoning under pressure** — a living simulation of how teams **argue, align, and act**.
+
+What sets CipherWolves apart is its **social intelligence**:  
+
+Each agent maintains **dynamic trust and suspicion scores** toward others, influencing every move.  
+These internal metrics evolve in real time — driving **alliance-building, deception, and betrayal** — mirroring the messy, emotional calculus behind **real human decisions**.
 
 ## 🧠 Post-Game Analysis: Autonomous Reflection at Scale
 ![PGA](https://github.com/user-attachments/assets/4dbbf17a-6f79-40bd-ac8e-5a7db8ddef1e)
@@ -41,11 +73,11 @@ Gemini synthesizes every trace—prompt history, communication transcripts, keyw
 
 This includes:
 
-- **Agent Profiles**: Breakdown of personality-driven strategy and adaptability
-- **Narrative Dominance**: Identification of influence leaders and echo agents
-- **Trust Dynamics**: Analysis of how internal metrics shaped alliances and outcomes
-- **Manipulation Patterns**: Detection of subtle misdirection or vote engineering
-- **Human Interaction Audit**: Evaluation of how the user altered agent behavior
+- 🧑‍💼 **Agent Profiles**: Breakdown of personality-driven strategy and adaptability
+- 📢 **Narrative Dominance**: Identification of influence leaders and echo agents
+- 🤝 **Trust Dynamics**: Analysis of how internal metrics shaped alliances and outcomes
+- 🎭 **Manipulation Patterns**: Detection of subtle misdirection or vote engineering
+- 🕵️‍♂️ **Human Interaction Audit**: Evaluation of how the user altered agent behavior
 
 This isn’t generic summarization. It’s **forensic group intelligence analysis**, fully explainable and reproducible.
 
@@ -84,22 +116,18 @@ Every agent is modular, every phase is documented, and every interaction is trac
 CipherWolves runs on the Agent Development Kit (ADK), a modular framework purpose-built for creating socially intelligent, memory-enabled agents. It lets us move beyond stateless LLM calls into a persistent multi-agent environment.
 
 Here's how we engineered it:
+- **👪 Parent-Child Agent System**  
+  We deploy multi-parent, multi-sub-agent clusters mirroring real team dynamics—each with scoped memory, persona, and strategy. Parents delegate cross-agent analysis to sub-agents, who track trust and suspicion in real time.
 
-- Parent-Child Agent System
-    
-    We deploy multi-parent, multi-sub-agent clusters mirroring real team dynamics—each with scoped memory, persona, and strategy. Parents delegate cross-agent analysis to sub-agents, who track trust and suspicion in real time.
-    
-- Function Tool for Web-Augmented Reasoning
-    
-    Parent agents can use Tavily search through the Function Tool interface—allowing them to discover references, or generate signals during the game. This simulates real-world decision contexts where external data influences discussion flow.
-    
-- SessionService for Conversation State Management
-    
-    We use SessionService to retain agent-specific dialogue context across phases—ensuring that when agents shift from discussion to voting or reflection, they preserve alignment and memory continuity.
-    
-- MemoryService for Long-Term Behavioral Modeling
-    
-    Trust and suspicion metrics are stored in MemoryService. This long-term store allows agents to develop historical context over the course of the workflow—mirroring how human memory informs judgment over time.
+- **🔍🧠 Function Tool for Web-Augmented Reasoning**  
+  Parent agents can use Tavily search through the Function Tool interface—allowing them to discover references, or generate signals during the game. This simulates real-world decision contexts where external data influences discussion flow.
+
+- **💬🧾 SessionService for Conversation State Management**  
+  We use SessionService to retain agent-specific dialogue context across phases—ensuring that when agents shift from discussion to voting or reflection, they preserve alignment and memory continuity.
+
+- **🧠📊 MemoryService for Long-Term Behavioral Modeling**  
+  Trust and suspicion metrics are stored in MemoryService. This long-term store allows agents to develop historical context over the course of the workflow—mirroring how human memory informs judgment over time.
+
 
 ## 🛠️ Technology Stack
 
